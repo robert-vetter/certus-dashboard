@@ -791,8 +791,16 @@ High-level layout:
 - `/docs`
   - `prd.md` (this document)
   - `architecture.md`
+  - `timeline.md` (project timeline, task tracking, completion status)
   - `ux/`
+    - `page_map.md` (complete page inventory and user flows)
+    - `user_flows.md` (detailed user journey maps)
   - `ui/`
+    - `tokens.json` (design tokens: colors, spacing, typography)
+    - `components_map.md` (Figma to code component mapping)
+    - `interaction_specs.md` (micro-interactions, animations, whimsy)
+    - `layout.md` (layout specifications)
+    - `microcopy.md` (UI text, labels, messages)
   - `decisions/`
   - `agent_logs/`
 - `.claude/agents`
@@ -810,13 +818,39 @@ High-level layout:
 - **CI pipeline:**
   - Checkout → install dependencies → run lint → run unit tests → install Playwright deps → run e2e tests.
 
-### 9.3 Query & API Contracts
+### 9.3 Task Tracking & Timeline Management
+
+**Timeline Document (`docs/timeline.md`):**
+- Central project timeline tracking all tasks, milestones, and deliverables
+- Maintained by `po-owner` agent
+- Updated whenever tasks are completed or status changes
+
+**Task Completion Workflow:**
+1. When any task is completed (design, development, documentation, etc.):
+   - Team member or agent marks task as completed
+   - `po-owner` updates `docs/timeline.md` with completion status
+   - Dependencies and blockers are updated
+   - Next tasks in sequence become active
+
+2. **Responsibilities:**
+   - **Developer/Designer:** Complete assigned tasks, notify of blockers
+   - **PO Owner Agent:** Update timeline, track progress, identify bottlenecks
+   - **Team:** Keep timeline current, report actual vs. planned progress
+
+3. **Timeline Structure:**
+   - Project phases and milestones
+   - Task breakdown with owners and status
+   - Dependencies between tasks
+   - Completion dates (planned vs. actual)
+   - Current blockers and risks
+
+### 9.4 Query & API Contracts
 
 Core query helpers (TypeScript type signatures):
 
 - `getMetricsDaily({ accountId, locationId?, from, to }): Promise<MetricsRow[]>`
 - `listRecentCalls({ accountId, locationId?, limit? }): Promise<CallListItem[]>`
-- `getCallDetail(callId: string): Promise<CallDetail>`  
+- `getCallDetail(callId: string): Promise<CallDetail>`
   (includes joins to orders/reservations, summaries, transcripts, notes)
 - `getOrderByCall(callId: string)`
 - `getReservationByCall(callId: string)`
@@ -875,12 +909,17 @@ This section defines how **local Claude Code agents** collaborate to implement a
 
 All agents live in `.claude/agents` inside this repo. **No global agents** are assumed.
 
-- **`po-owner.md`**  
+- **`po-owner.md`**
   - Reads `docs/prd.md` and `docs/architecture.md`.
   - Shards work into epics and stories, writing into:
     - `/epics/*`
     - `/stories/story_X.Y.md`
   - Maintains epic/story status fields.
+  - **Task Tracking Responsibilities:**
+    - Updates `docs/timeline.md` with project timeline and task completion status
+    - Marks tasks as "done" when completed by any team member
+    - Tracks dependencies, blockers, and progress across all work streams
+    - Maintains high-level project status and milestone tracking
 
 - **`backend-architect.md`**  
   - Designs and evolves the database schema, views, MV, and RLS policies.
