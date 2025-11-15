@@ -8,6 +8,72 @@
   }
 }
 
+/* Figma Design Tokens */
+:root {
+  /* Fonts */
+  --accent-font-font-family: "Albra", Helvetica;
+  --primary-font-font-family: "Afacad", Helvetica;
+  --secondary-font-font-family: "Inter Tight", Helvetica;
+
+  /* Shadows */
+  --cardshadownew: 0px 2px 11.5px 0px rgba(0, 0, 0, 0.12);
+  --cardshadowreview: 0px -13px 22px 0px rgba(0, 0, 0, 0.25);
+  --strokecard: rgba(237, 43, 72, 0.13);
+
+  /* Spacing & Sizing */
+  --variable-collection-padding-small-padding: 4px;
+  --variable-collection-radius-small-radius: 8px;
+  --variable-collection-stroke-small-stroke: 4px;
+
+  /* Accent Color Shades (Red/Pink) */
+  --variable-collection-colors-a-shade1: rgba(239, 52, 80, 1);
+  --variable-collection-colors-a-shade2: rgba(241, 85, 108, 1);
+  --variable-collection-colors-a-shade3: rgba(245, 128, 145, 1);
+  --variable-collection-colors-a-shade4: rgba(248, 170, 181, 1);
+  --variable-collection-colors-a-shade5: rgba(255, 245, 247, 1);
+  --variable-collection-colors-accent-color: rgba(238, 43, 71, 1);
+  --variable-collection-colors-candy-20: rgba(239, 52, 80, 0.2);
+
+  /* Primary Color Shades (Dark grays/blacks) */
+  --variable-collection-colors-p-shade1: rgba(40, 42, 46, 1);
+  --variable-collection-colors-p-shade2: rgba(70, 71, 73, 1);
+  --variable-collection-colors-p-shade3: rgba(116, 117, 119, 1);
+  --variable-collection-colors-p-shade4: rgba(163, 163, 164, 1);
+  --variable-collection-colors-p-shade5: rgba(186, 186, 187, 1);
+  --variable-collection-colors-p-shade6: rgba(239, 239, 239, 1);
+  --variable-collection-colors-primary-color: rgba(24, 25, 28, 1);
+
+  /* Secondary Color Shades (Light grays) */
+  --variable-collection-colors-s-shade1: rgba(248, 248, 248, 1);
+  --variable-collection-colors-s-shade2: rgba(216, 216, 216, 1);
+  --variable-collection-colors-s-shade3: rgba(187, 187, 187, 1);
+  --variable-collection-colors-s-shade4: rgba(157, 157, 157, 1);
+  --variable-collection-colors-s-shade5: rgba(142, 142, 142, 1);
+  --variable-collection-colors-secondary-color: rgba(246, 246, 246, 1);
+
+  /* Whites */
+  --variable-collection-colors-white: rgba(255, 255, 255, 1);
+  --variable-collection-colors-white-card: rgba(255, 255, 255, 0.7);
+  --variable-collection-colors-white-card2: rgba(248, 248, 248, 0.8);
+  --variable-collection-inner-box: rgba(24, 25, 28, 1);
+}
+
+/* Dark Mode Theme */
+[data-variable-collection-mode="dark"] {
+  --variable-collection-colors-candy-20: rgba(239, 52, 80, 0.2);
+  --variable-collection-colors-primary-color: rgba(24, 25, 28, 1);
+  --variable-collection-colors-s-shade2: rgba(216, 216, 216, 1);
+  --variable-collection-inner-box: rgba(24, 25, 28, 1);
+}
+
+/* White/Light Mode Theme */
+[data-variable-collection-mode="white"] {
+  --variable-collection-colors-candy-20: rgba(239, 52, 80, 1);
+  --variable-collection-colors-primary-color: rgba(255, 255, 255, 1);
+  --variable-collection-colors-s-shade2: rgba(157, 157, 157, 1);
+  --variable-collection-inner-box: rgba(239, 52, 80, 0.13);
+}
+
 
 
 @layer base {

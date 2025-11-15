@@ -10,6 +10,34 @@ const config: Config = {
   theme: {
   	extend: {
   		colors: {
+  			// Figma CSS Variable Colors
+  			strokecard: 'var(--strokecard)',
+  			'variable-collection-colors-a-shade1': 'var(--variable-collection-colors-a-shade1)',
+  			'variable-collection-colors-a-shade2': 'var(--variable-collection-colors-a-shade2)',
+  			'variable-collection-colors-a-shade3': 'var(--variable-collection-colors-a-shade3)',
+  			'variable-collection-colors-a-shade4': 'var(--variable-collection-colors-a-shade4)',
+  			'variable-collection-colors-a-shade5': 'var(--variable-collection-colors-a-shade5)',
+  			'variable-collection-colors-accent-color': 'var(--variable-collection-colors-accent-color)',
+  			'variable-collection-colors-candy-20': 'var(--variable-collection-colors-candy-20)',
+  			'variable-collection-colors-p-shade1': 'var(--variable-collection-colors-p-shade1)',
+  			'variable-collection-colors-p-shade2': 'var(--variable-collection-colors-p-shade2)',
+  			'variable-collection-colors-p-shade3': 'var(--variable-collection-colors-p-shade3)',
+  			'variable-collection-colors-p-shade4': 'var(--variable-collection-colors-p-shade4)',
+  			'variable-collection-colors-p-shade5': 'var(--variable-collection-colors-p-shade5)',
+  			'variable-collection-colors-p-shade6': 'var(--variable-collection-colors-p-shade6)',
+  			'variable-collection-colors-primary-color': 'var(--variable-collection-colors-primary-color)',
+  			'variable-collection-colors-s-shade1': 'var(--variable-collection-colors-s-shade1)',
+  			'variable-collection-colors-s-shade2': 'var(--variable-collection-colors-s-shade2)',
+  			'variable-collection-colors-s-shade3': 'var(--variable-collection-colors-s-shade3)',
+  			'variable-collection-colors-s-shade4': 'var(--variable-collection-colors-s-shade4)',
+  			'variable-collection-colors-s-shade5': 'var(--variable-collection-colors-s-shade5)',
+  			'variable-collection-colors-secondary-color': 'var(--variable-collection-colors-secondary-color)',
+  			'variable-collection-colors-white': 'var(--variable-collection-colors-white)',
+  			'variable-collection-colors-white-card': 'var(--variable-collection-colors-white-card)',
+  			'variable-collection-colors-white-card2': 'var(--variable-collection-colors-white-card2)',
+  			'variable-collection-inner-box': 'var(--variable-collection-inner-box)',
+
+  			// shadcn/ui compatible aliases
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {
@@ -51,10 +79,28 @@ const config: Config = {
   				'5': 'hsl(var(--chart-5))'
   			}
   		},
+  		fontFamily: {
+  			'accent-font': 'var(--accent-font-font-family)',
+  			'primary-font': 'var(--primary-font-font-family)',
+  			'secondary-font': 'var(--secondary-font-font-family)',
+  			sans: ['Inter Tight', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+  		},
+  		boxShadow: {
+  			cardshadownew: 'var(--cardshadownew)',
+  			cardshadowreview: 'var(--cardshadowreview)',
+  		},
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
   			sm: 'calc(var(--radius) - 4px)'
+  		},
+  		transitionDuration: {
+  			'80': '80ms',
+  			'120': '120ms',
+  			'140': '140ms',
+  			'160': '160ms',
+  			'180': '180ms',
+  			'220': '220ms',
   		}
   	}
   },
