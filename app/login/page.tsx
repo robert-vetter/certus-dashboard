@@ -33,7 +33,7 @@ export default function LoginPage() {
         text: 'Authentication failed. Please try again.',
       })
     }
-  }, [])
+  }, [supabase.auth])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -76,11 +76,11 @@ export default function LoginPage() {
         type: 'success',
         text: 'Check your email for the magic link!',
       })
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Login error:', error)
       setMessage({
         type: 'error',
-        text: error.message || 'An error occurred. Please try again.',
+        text: error instanceof Error ? error.message : 'An error occurred. Please try again.',
       })
     } finally {
       setLoading(false)
@@ -176,7 +176,7 @@ export default function LoginPage() {
           {/* Help Text */}
           <div className="mt-6 pt-6 border-t border-gray-100">
             <p className="text-xs text-center text-gray-500">
-              We'll email you a secure link.
+              We&apos;ll email you a secure link.
               <br />
               Click it to access your dashboard instantly.
             </p>
