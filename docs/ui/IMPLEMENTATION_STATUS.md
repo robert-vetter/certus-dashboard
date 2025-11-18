@@ -97,31 +97,117 @@
 
 ---
 
+## ✅ Completed: Call Logs Page
+
+### Components Implemented
+
+#### Call Logs Components
+- ✅ **Call Detail Sheet** (`/components/dashboard/call-detail-sheet.tsx`)
+  - Drawer/sheet implementation with shadcn Sheet component
+  - Sticky header with phone number, health indicator, metadata
+  - Conditional top banners (Order/Reservation/Complaint with gradient backgrounds)
+  - Audio recording playback
+  - Conversation transcript with speaker avatars
+  - Order details with reliable `total_amount` usage
+  - Reservation details with special requests
+  - Call summary section
+  - Skeleton loader for async loading states
+
+- ✅ **Call Logs Client** (`/app/(dashboard)/call-logs/call-logs-client.tsx`)
+  - Client-side state management (filters, selected call)
+  - Location selector for multi-location franchise owners
+  - Time range filter tabs (Today/Yesterday/Week/All)
+  - Stats summary cards (Total Calls, Orders, Reservations, Avg Duration)
+  - Call list table with clickable rows
+  - Opens CallDetailSheet in drawer on row click
+
+- ✅ **Skeleton Components** (`/components/dashboard/skeletons.tsx`)
+  - `CallDetailSheetSkeleton` for call drawer loading
+  - `StatsCardSkeleton` for stats cards
+  - `RecentActivitiesTableSkeleton` for table loading
+  - `KPICardSkeleton` for KPI tiles
+  - Consistent shimmer animations
+
+### Pages Implemented
+- ✅ **Call Logs Page** (`/app/(dashboard)/call-logs/page.tsx`)
+  - Server-side rendering with authentication
+  - Two-tier location access (franchise owner vs single location)
+  - Batch fetches for call type determination (Set-based O(1) lookups)
+  - Pre-fetches selected call data if `callId` in URL
+  - Time range filtering (Today/Yesterday/Week/All)
+  - Calls table with health indicators and metadata
+  - Deep linking support (`?callId=123` auto-opens drawer)
+
+- ✅ **Call Logs Loading State** (`/app/(dashboard)/call-logs/loading.tsx`)
+  - Skeleton loader for page-level async loading
+  - Matches actual page layout structure
+
+### Data Patterns
+
+#### Call Type Detection (Never Use Boolean Flags!)
+```typescript
+// ✅ CORRECT: Check actual rows in related tables
+const callIds = calls?.map(c => c.id) || [];
+const [allOrders, allReservations] = await Promise.all([
+  supabaseAdmin.from('order_logs').select('call_id').in('call_id', callIds),
+  supabaseAdmin.from('reservations').select('call_id').in('call_id', callIds)
+]);
+
+// Create lookup sets for O(1) access
+const orderCallIds = new Set(allOrders.data?.map(o => o.call_id) || []);
+const reservationCallIds = new Set(allReservations.data?.map(r => r.call_id) || []);
+
+// Determine type
+if (orderCallIds.has(call.id)) displayType = 'order';
+else if (reservationCallIds.has(call.id)) displayType = 'reservation';
+else if (call.pathway_tags_formatted?.includes('catering')) displayType = 'catering';
+else displayType = 'inquiry';
+```
+
+#### Order Total Calculation (Always Reliable!)
+```typescript
+// ✅ CORRECT: Use total_amount directly from order_logs
+const displayTotal = order.total_amount || 0;
+const formattedTotal = `$${(displayTotal / 100).toFixed(2)}`;
+
+// ❌ WRONG: Never calculate from components
+const calculatedTotal = (order.subtotal || 0) + (order.total_tax || 0) + ...;
+```
+
+### Database Reliability Rules
+
+#### ✅ Fully Reliable Tables
+- `order_logs` — All fields including `total_amount`, `subtotal`, `total_tax`, etc.
+- `reservations` — All fields
+- `complaints` — All fields
+- `upsells` — All fields
+
+#### ❌ Unreliable Fields
+- `call_logs.order_made` — Often false even when orders exist
+- `call_logs.reservation_made` — Often false even when reservations exist
+- `call_logs.order_completed` — Unreliable status
+
+**Best Practice:** Always query related tables directly, never trust boolean flags in `call_logs`.
+
+### Authentication & Location Access
+
+#### Two-Tier Pattern Implemented
+1. **Franchise Owner** (`role_permission_id = 5`):
+   - Check email in `accounts` table
+   - If found, fetch ALL locations for that account
+   - Show location selector dropdown
+   - URL param for location selection (`?locationId=123`)
+
+2. **Single Location Manager**:
+   - Query `locations.certus_notification_email = user.email`
+   - User gets ONE fixed location
+   - No location selector shown
+
+**Implementation:** Both `/overview` and `/call-logs` pages use identical pattern
+
+---
+
 ## 📋 Remaining Pages
-
-### Call Logs Page (`/app/(dashboard)/call-logs/page.tsx`)
-**Status:** Not started
-
-**Required Components:**
-- [ ] Call logs table with filters
-- [ ] Date range picker
-- [ ] Call type filter dropdown
-- [ ] Status filter
-- [ ] Duration bucket filter
-- [ ] Location filter (if multi-location)
-- [ ] Call drawer (right sidebar)
-  - [ ] Transcript tab
-  - [ ] Summary tab
-  - [ ] Order details tab
-  - [ ] Internal notes tab
-- [ ] Customer profile sidebar
-- [ ] Audio player component
-
-**Data Needs:**
-- `calls_v` view
-- `orders_v` view
-- `reservations_v` view
-- `internal_notes` table
 
 ### Analytics Page (`/app/(dashboard)/analytics/page.tsx`)
 **Status:** Not started

@@ -641,6 +641,160 @@ From the Figma design (1280px wide), responsive breakpoints:
 
 ### Completed Components
 
+#### Call Logs Components (`/components/dashboard/`)
+- ✅ `call-detail-sheet.tsx` - Right-hand sheet drawer for call details
+  - **File:** [components/dashboard/call-detail-sheet.tsx](../../components/dashboard/call-detail-sheet.tsx)
+  - **shadcn/ui Base:** `Sheet`, `SheetContent`, `SheetHeader`, `SheetTitle`, `Badge`
+  - **Purpose:** Displays complete call details in a side panel
+
+  **Interface:**
+  ```tsx
+  interface CallDetailData {
+    // Basic call info
+    id: string;
+    call_id: string;
+    started_at: string;
+    ended_at: string;
+    duration_seconds: number;
+    from_number: string;
+    certus_number: string;
+    status: string;
+    recording_url?: string;
+
+    // Call content
+    transcript_md?: string;
+    summary_md?: string;
+    call_summary?: string;
+    call_summary_short?: string;
+
+    // Call metadata
+    call_type?: string;
+    pathway_tags_formatted?: string;
+    call_health: 'success' | 'warning' | 'error';
+
+    // Related data
+    orders?: Array<{ order_id, total_amount, subtotal, ... }>;
+    reservations?: Array<{ reservation_id, guest_count, ... }>;
+    upsells?: Array<{ upsell_id, upselled_value, ... }>;
+    complaints?: Array<{ complaint_id, type, complaint, ... }>;
+    internal_notes?: Array<{ note_id, note_text, ... }>;
+  }
+
+  interface CallDetailSheetProps {
+    call: CallDetailData | null;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    isLoading?: boolean;
+  }
+  ```
+
+  **Layout Structure:**
+  ```tsx
+  <Sheet open={open} onOpenChange={onOpenChange}>
+    <SheetContent className="w-full sm:max-w-2xl overflow-y-auto p-0">
+      {/* Sticky Header (always visible) */}
+      <div className="sticky top-0 bg-white border-b z-10 px-6 py-4">
+        <SheetHeader>
+          <SheetTitle>{formatPhoneNumber(call.from_number)}</SheetTitle>
+          <div>Date, Time, Duration, Call Type</div>
+        </SheetHeader>
+      </div>
+
+      {/* Scrollable Content */}
+      <div className="px-6 py-6 space-y-6">
+        {/* Top Banner (conditional) */}
+        {hasOrder && <OrderBanner />}
+        {hasReservation && <ReservationBanner />}
+        {hasComplaint && <ComplaintBanner />}
+
+        {/* Recording */}
+        {recording_url && <audio controls />}
+
+        {/* Conversation Transcript */}
+        {chatMessages.length > 0 && <ConversationSection />}
+
+        {/* Order Details */}
+        {hasOrder && <OrderDetailsSection />}
+
+        {/* Reservation Details */}
+        {hasReservation && <ReservationDetailsSection />}
+
+        {/* Summary */}
+        {call.call_summary && <SummarySection />}
+      </div>
+    </SheetContent>
+  </Sheet>
+  ```
+
+  **Key Features:**
+  1. **Conditional Top Banner** — Shows different styled banners based on call outcome:
+     - **Order Banner:** Green gradient with total amount and fulfillment type
+     - **Reservation Banner:** Blue gradient with guest count and date/time
+     - **Complaint Banner:** Red gradient with complaint details
+
+  2. **Health Indicator** — Colored dot in header:
+     - Success: `bg-emerald-500` (green)
+     - Warning: `bg-amber-500` (yellow)
+     - Error: `bg-red-500` (red)
+
+  3. **Conversation Transcript:**
+     - Speaker avatars (AI = red, Customer = blue)
+     - Speaker labels in uppercase
+     - Parsed from markdown format (`**Certus:**` and `**Customer:**`)
+
+  4. **Order Details:**
+     - **CRITICAL:** Uses `order.total_amount` directly from `order_logs` (fully reliable)
+     - Never calculates totals from component fields
+     - Shows full order breakdown: subtotal, tax, delivery, tip, total
+     - Displays `full_order` field if available
+
+  5. **Skeleton Loader:**
+     - Shown when `isLoading = true` or `call = null`
+     - See [components/dashboard/skeletons.tsx](../../components/dashboard/skeletons.tsx)
+     - `CallDetailSheetSkeleton` component
+
+  **Design Patterns:**
+  - Sticky header for context while scrolling
+  - Gradient backgrounds for outcome banners
+  - Space-y-6 for consistent section spacing
+  - `border-t` separators for major sections
+  - Amount formatting: `${(amount / 100).toFixed(2)}`
+
+  **Helper Functions:**
+  ```tsx
+  const formatTime = (dateString: string) => {
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  const formatPhoneNumber = (num: string) => {
+    // Returns (123) 456-7890 format
+  };
+
+  const parseTranscript = (transcript: string): ChatMessage[] => {
+    // Parses markdown into { speaker, text }[] array
+  };
+  ```
+
+  **Database Reliability Notes:**
+  - ✅ `order_logs.total_amount` is FULLY RELIABLE — use directly
+  - ✅ All `order_logs` fields are accurate
+  - ❌ Never use `call_logs.order_made` boolean (unreliable)
+  - ✅ Check actual rows in `order_logs` to determine if order exists
+
+- ✅ `call-logs-client.tsx` - Client component wrapper for Call Logs page
+  - **File:** [app/(dashboard)/call-logs/call-logs-client.tsx](../../app/(dashboard)/call-logs/call-logs-client.tsx)
+  - **Purpose:** Handles client-side state for filters, selected call, and drawer
+  - **Features:**
+    - Location selector (for franchise owners with multiple locations)
+    - Time range filter tabs (Today/Yesterday/Week/All)
+    - Stats summary cards (Total Calls, Orders, Reservations, Avg Duration)
+    - Call list table with clickable rows
+    - Opens CallDetailSheet in drawer when row clicked
+
 #### Layout (`/components/layout/`)
 - ✅ `sidebar.tsx` - Navigation sidebar with white theme, Certus logo, active states
 - ✅ `dashboard-header.tsx` - Header with greeting, referral banner, user avatar

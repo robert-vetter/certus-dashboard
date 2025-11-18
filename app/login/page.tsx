@@ -5,12 +5,17 @@ import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { checkUserExists } from './actions'
+import { checkUserExists, signInDirectly } from './actions'
+import { useRouter } from 'next/navigation'
+
+// Set to true to bypass magic link and sign in directly (for development)
+const BYPASS_MAGIC_LINK = true
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const router = useRouter()
 
   const supabase = createClient()
 
@@ -62,20 +67,33 @@ export default function LoginPage() {
         return
       }
 
-      // User exists and has permissions, send magic link
-      const { error: signInError } = await supabase.auth.signInWithOtp({
-        email: normalizedEmail,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      })
+      // User exists and has permissions
+      if (BYPASS_MAGIC_LINK) {
+        // Bypass magic link - sign in directly
+        const result = await signInDirectly(normalizedEmail)
 
-      if (signInError) throw signInError
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to sign in')
+        }
 
-      setMessage({
-        type: 'success',
-        text: 'Check your email for the magic link!',
-      })
+        // Redirect to overview
+        router.push('/overview')
+      } else {
+        // Normal flow - send magic link
+        const { error: signInError } = await supabase.auth.signInWithOtp({
+          email: normalizedEmail,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
+          },
+        })
+
+        if (signInError) throw signInError
+
+        setMessage({
+          type: 'success',
+          text: 'Check your email for the magic link!',
+        })
+      }
     } catch (error: unknown) {
       console.error('Login error:', error)
       setMessage({

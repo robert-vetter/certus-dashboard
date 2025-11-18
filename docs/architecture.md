@@ -316,7 +316,7 @@ At a high level:
 
 **Refresh strategy:**
 
-- `pg_cron` schedule: every 2 minutes.
+- `pg_cron` schedule: every 5 minutes.
 - Index on `(account_id, location_id, date)` for fast lookups.
 
 ### 4.5 RLS & Security
@@ -329,6 +329,78 @@ At a high level:
   - Server-side Next.js code (server actions).
   - CI scripts (if needed).
 - No service role key on the client.
+
+### 4.6 Authentication & Location Access
+
+The dashboard implements a **two-tier location access pattern** to support both franchise owners (multi-location) and single location managers.
+
+**Authentication Flow:**
+
+1. **User Login** — Magic link authentication via Supabase Auth
+2. **Permission Check** — User must have entry in `user_roles_permissions` table
+3. **Location Access Determination** — Two-tier pattern:
+
+#### Tier 1: Franchise Owner (Multi-Location Access)
+
+If user has `role_permission_id = 5` (owner permissions):
+
+```typescript
+// Step 1: Check if user has an account (franchise owner)
+const { data: accountData } = await supabaseAdmin
+  .from('accounts')
+  .select('account_id, email')
+  .eq('email', user.email)
+  .maybeSingle();
+
+if (accountData) {
+  // Step 2: Fetch ALL locations for this account
+  const { data: allLocations } = await supabaseAdmin
+    .from('locations')
+    .select('location_id, name, certus_notification_email')
+    .eq('account_id', accountData.account_id);
+
+  // User can access all locations, switch between them
+}
+```
+
+**Franchise Owner Features:**
+- Access to multiple locations
+- Location selector dropdown in UI
+- URL-based location selection (`?locationId=123`)
+- Default to first location if not specified
+
+#### Tier 2: Single Location Manager
+
+If not a franchise owner or no account found:
+
+```typescript
+// Fall back to email-based lookup for single location
+const { data: locationResults } = await supabaseAdmin
+  .from('locations')
+  .select('location_id, name, certus_notification_email')
+  .eq('certus_notification_email', user.email)
+  .limit(1);
+
+if (locationResults && locationResults.length > 0) {
+  selectedLocation = locationResults[0];
+  locations = [selectedLocation]; // Only one location
+}
+```
+
+**Single Location Manager Features:**
+- Access to one specific location only
+- No location selector (fixed to their location)
+- Tied to location via `certus_notification_email` field
+
+**Implementation Files:**
+- [app/(dashboard)/overview/page.tsx](../app/(dashboard)/overview/page.tsx:34-89) — Reference implementation
+- [app/(dashboard)/call-logs/page.tsx](../app/(dashboard)/call-logs/page.tsx:34-89) — Same pattern
+- See [docs/auth/authentication.md](auth/authentication.md) for complete auth documentation
+
+**URL State Management:**
+- Franchise owners: `?locationId=123` to select location
+- Location persists across page navigation
+- Single location managers: no location param needed
 
 ---
 

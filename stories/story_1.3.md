@@ -10,7 +10,7 @@
 
 ## Description
 
-Create the `mv_metrics_daily` materialized view that aggregates calls, orders, and reservations into daily metrics per account and location. Set up pg_cron to refresh this view every 2 minutes to keep metrics current.
+Create the `mv_metrics_daily` materialized view that aggregates calls, orders, and reservations into daily metrics per account and location. Set up pg_cron to refresh this view every 5 minutes to keep metrics current.
 
 ---
 
@@ -27,7 +27,7 @@ Create the `mv_metrics_daily` materialized view that aggregates calls, orders, a
 - [ ] Minutes saved uses baseline from location_settings or account_settings
 - [ ] Reservation revenue estimate uses avg_spend_per_head hierarchy (reservation override > location > account)
 - [ ] pg_cron enabled on Supabase project
-- [ ] Cron job scheduled to refresh view every 2 minutes
+- [ ] Cron job scheduled to refresh view every 5 minutes
 - [ ] Indexes created on (account_id, location_id, date) for fast lookups
 - [ ] Manual refresh function available for debugging
 - [ ] View refresh completes in < 5 seconds with 100k+ call records
@@ -114,7 +114,7 @@ ON mv_metrics_daily (account_id, location_id, date);
 -- pg_cron refresh job
 SELECT cron.schedule(
   'refresh-metrics-daily',
-  '*/2 * * * *',  -- Every 2 minutes
+  '*/5 * * * *',  -- Every 5 minutes
   'REFRESH MATERIALIZED VIEW CONCURRENTLY mv_metrics_daily;'
 );
 ```

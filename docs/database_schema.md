@@ -8,24 +8,100 @@
 
 ## Table of Contents
 
-1. [Core Tables](#core-tables)
+1. [⚠️ Database Reliability Notes](#️-database-reliability-notes) **READ THIS FIRST**
+2. [Core Tables](#core-tables)
    - [accounts](#accounts)
    - [locations](#locations)
    - [call_logs](#call_logs)
    - [order_logs](#order_logs)
    - [reservations](#reservations)
-2. [Supporting Tables](#supporting-tables)
+3. [Configuration Tables](#configuration-tables)
+   - [account_settings](#account_settings)
+   - [location_settings](#location_settings)
+4. [Supporting Tables](#supporting-tables)
    - [complaints](#complaints)
    - [deliveries](#deliveries)
    - [order_errors](#order_errors)
    - [upsells](#upsells)
    - [daily_call_reports](#daily_call_reports)
-3. [Views](#views)
+5. [Views](#views)
    - [calls_v](#calls_v)
    - [orders_v](#orders_v)
    - [reservations_v](#reservations_v)
-4. [Materialized Views](#materialized-views)
+6. [Materialized Views](#materialized-views)
+   - [mv_metrics_daily](#mv_metrics_daily) ⭐ **NEW**
    - [mv_call_events](#mv_call_events)
+
+---
+
+## ⚠️ Database Reliability Notes
+
+**CRITICAL:** Not all database fields are reliable. This section documents which tables/fields can be trusted.
+
+### ✅ Fully Reliable Tables (Source of Truth)
+
+These tables are **completely reliable** and all fields should be trusted:
+
+- **`order_logs`** - All fields are accurate, including `total_amount`, `subtotal`, `total_tax`, etc.
+- **`reservations`** - All fields are accurate
+- **`complaints`** - All fields are accurate
+- **`upsells`** - All fields are accurate
+- **`accounts`** - All fields are accurate
+- **`locations`** - All fields are accurate
+
+### ❌ Unreliable Fields in `call_logs`
+
+The following boolean flags in `call_logs` are **UNRELIABLE and should NEVER be used**:
+
+- ❌ `order_made` - Often false even when orders exist
+- ❌ `reservation_made` - Often false even when reservations exist
+- ❌ `order_completed` - Unreliable status indicator
+
+**Why they're unreliable:** These flags may not be updated correctly during the call process, leading to false negatives.
+
+### 📋 Call Type Detection Strategy
+
+**NEVER use boolean flags from `call_logs` to determine call type!**
+
+Instead, check for actual rows in related tables:
+
+```typescript
+// ✅ CORRECT: Check actual database rows
+const { data: orders } = await supabase
+  .from('order_logs')
+  .select('call_id')
+  .eq('call_id', callId);
+
+const { data: reservations } = await supabase
+  .from('reservations')
+  .select('call_id')
+  .eq('call_id', callId);
+
+// Determine type
+if (orders && orders.length > 0) {
+  callType = 'order';
+} else if (reservations && reservations.length > 0) {
+  callType = 'reservation';
+} else if (pathwayTags?.includes('catering')) {
+  callType = 'catering';
+} else {
+  callType = 'inquiry';
+}
+```
+
+```typescript
+// ❌ WRONG: Using unreliable boolean flags
+if (call.order_made) {  // DON'T DO THIS!
+  callType = 'order';
+}
+```
+
+### 💡 Best Practices
+
+1. **Always query related tables** - Check `order_logs`, `reservations`, etc. directly
+2. **Use Set lookups for performance** - When checking many calls, use `Set` for O(1) access
+3. **Trust order_logs amounts** - `total_amount`, `subtotal`, `total_tax` are all reliable
+4. **Never calculate totals** - Use `total_amount` directly from `order_logs`
 
 ---
 
@@ -273,12 +349,15 @@ create index IF not exists ix_calls_v_loc_date on public.call_logs using btree (
 - `started_at_utc` - Call start time
 - `ended_at_utc` - Call end time
 - `corrected_duration_seconds` - Actual call duration
-- `order_made` - Boolean flag for orders
-- `reservation_made` - Boolean flag for reservations
+- ⚠️ `order_made` - Boolean flag for orders **UNRELIABLE - Do not use!**
+- ⚠️ `reservation_made` - Boolean flag for reservations **UNRELIABLE - Do not use!**
+- ⚠️ `order_completed` - Boolean flag **UNRELIABLE - Do not use!**
 - `call_status` - Status text
 - `transcription_formatted` - Call transcript
 - `call_summary` - AI-generated summary
 - `recording_url` - Audio recording URL
+
+**⚠️ IMPORTANT:** The boolean flags (`order_made`, `reservation_made`, `order_completed`) in this table are unreliable and should NOT be used. To determine call type, always check for actual rows in the related tables (`order_logs`, `reservations`).
 
 ---
 
@@ -384,6 +463,79 @@ create table public.reservations (
 - `guest_count` - Number of guests
 - `reservation_datetime` - Combined date/time
 - `average_spend_per_head` - Per-person spend override
+
+---
+
+## Configuration Tables
+
+### account_settings
+
+Account-level configuration for metrics calculation and revenue estimation.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.account_settings (
+  account_id UUID PRIMARY KEY REFERENCES public.accounts(account_id) ON DELETE CASCADE,
+
+  -- Minutes saved calculation
+  minutes_saved_baseline_seconds INTEGER NOT NULL DEFAULT 120,
+
+  -- Revenue calculation mode
+  revenue_mode TEXT NOT NULL DEFAULT 'orders_only'
+    CHECK (revenue_mode IN ('orders_only', 'orders_plus_res_estimate')),
+
+  -- Default average spend per head for reservation revenue estimation
+  avg_spend_per_head NUMERIC(10, 2) NULL,
+
+  -- Timestamps
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_settings_account_id
+  ON public.account_settings(account_id);
+```
+
+**Key Fields:**
+- `account_id` - Primary key, foreign key to accounts
+- `minutes_saved_baseline_seconds` - Default baseline call duration (seconds) for calculating time saved. Default: 120s (2 minutes)
+- `revenue_mode` - How to calculate total revenue: `'orders_only'` or `'orders_plus_res_estimate'`
+- `avg_spend_per_head` - Default average spend per person for reservation revenue estimates
+
+**Usage:**
+Used by `mv_metrics_daily` to calculate minutes_saved and reservation revenue estimates.
+
+---
+
+### location_settings
+
+Location-specific configuration overrides for account-level settings.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.location_settings (
+  location_id UUID PRIMARY KEY REFERENCES public.locations(location_id) ON DELETE CASCADE,
+
+  -- Optional overrides for account-level settings
+  minutes_saved_baseline_seconds INTEGER NULL,
+  avg_spend_per_head NUMERIC(10, 2) NULL,
+
+  -- Timestamps
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_settings_location_id
+  ON public.location_settings(location_id);
+```
+
+**Key Fields:**
+- `location_id` - Primary key, foreign key to locations
+- `minutes_saved_baseline_seconds` - Location override for baseline call duration. If NULL, uses account default
+- `avg_spend_per_head` - Location override for avg spend per head. If NULL, uses account default or `locations.avg_spend_per_head`
+
+**Settings Hierarchy:**
+1. Location-specific override (`location_settings`)
+2. Account default (`account_settings`)
+3. Fallback default (120 seconds for minutes_saved)
 
 ---
 
@@ -684,6 +836,117 @@ from
 ---
 
 ## Materialized Views
+
+### mv_metrics_daily
+
+⭐ **Primary metrics table for dashboard KPIs and analytics**
+
+Pre-aggregated daily metrics per location for fast KPI queries. Automatically refreshed every 1 minute via pg_cron.
+
+**Aggregation Level:** `(account_id, location_id, date)`
+
+**Key Metrics:**
+- Call counts (total, orders, reservations, completed)
+- Revenue (orders + reservation estimates)
+- Upsells count and value
+- Minutes saved (calculated from baseline)
+- Average call duration
+
+**Query Example:**
+```sql
+-- Get today's metrics for a location
+SELECT * FROM mv_metrics_daily
+WHERE location_id = 'your-location-uuid'
+  AND date = CURRENT_DATE;
+
+-- Get last 7 days for an account
+SELECT * FROM mv_metrics_daily
+WHERE account_id = 'your-account-uuid'
+  AND date >= CURRENT_DATE - INTERVAL '7 days'
+ORDER BY date DESC;
+```
+
+**Helper Function:**
+```sql
+-- Use the built-in helper for date range queries
+SELECT * FROM get_metrics_for_range(
+  'account-uuid'::UUID,
+  'location-uuid'::UUID,  -- NULL for all locations
+  CURRENT_DATE - INTERVAL '30 days',
+  CURRENT_DATE
+);
+```
+
+**Schema:**
+```sql
+CREATE MATERIALIZED VIEW public.mv_metrics_daily AS
+-- (see migration file for full query)
+
+-- Columns returned:
+-- account_id UUID
+-- location_id UUID
+-- date DATE
+-- total_calls BIGINT
+-- orders_count BIGINT
+-- reservations_count BIGINT
+-- completed_calls BIGINT
+-- total_revenue_orders NUMERIC
+-- total_revenue_res_estimate NUMERIC
+-- total_revenue_combined NUMERIC
+-- upsells_count BIGINT
+-- total_upsell_value NUMERIC
+-- minutes_saved NUMERIC(precision, 2)
+-- avg_call_duration_seconds NUMERIC
+```
+
+**Indexes:**
+- `UNIQUE (account_id, location_id, date)` - Primary lookup
+- `(date DESC)` - Date range queries
+- `(location_id, date DESC)` - Location-specific queries
+- `(account_id, date DESC)` - Account-wide queries
+
+**Refresh Schedule:**
+- **Automatic:** Every 1 minute via pg_cron job `refresh_metrics_daily`
+- **Manual:** `REFRESH MATERIALIZED VIEW CONCURRENTLY mv_metrics_daily;`
+- **Function:** `SELECT public.refresh_metrics_daily();`
+
+**Revenue Calculation Logic:**
+
+1. **Order Revenue:** Sum of `order_logs.total` for orders created on date
+2. **Reservation Revenue Estimate:**
+   ```
+   guest_count × avg_spend_per_head
+
+   Where avg_spend_per_head hierarchy:
+   1. reservations.average_spend_per_head (reservation-specific override)
+   2. location_settings.avg_spend_per_head (location override)
+   3. locations.avg_spend_per_head (location default)
+   4. account_settings.avg_spend_per_head (account default)
+   5. 0 (fallback)
+   ```
+3. **Combined Revenue:** `total_revenue_orders + total_revenue_res_estimate`
+
+**Minutes Saved Calculation:**
+```
+minutes_saved = (completed_calls × baseline_seconds) / 60
+
+Where baseline_seconds hierarchy:
+1. location_settings.minutes_saved_baseline_seconds
+2. account_settings.minutes_saved_baseline_seconds
+3. 120 (default: 2 minutes)
+```
+
+**Performance Notes:**
+- Uses `REFRESH MATERIALIZED VIEW CONCURRENTLY` to allow reads during refresh
+- Typical refresh time: < 1 second for 10K daily records
+- Queries on this view are 100-1000x faster than joining raw tables
+
+**Usage in Dashboard:**
+- Overview page KPI tiles: Query `WHERE date = CURRENT_DATE`
+- Analytics charts: Query date ranges with `WHERE date BETWEEN ... AND ...`
+- Trend calculations: Compare current period vs previous period
+
+---
 
 ### mv_call_events
 

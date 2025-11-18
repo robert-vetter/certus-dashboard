@@ -145,10 +145,15 @@ As a **restaurant operator** (or Certus ops agent), I want to:
 
   Clicking a row navigates to Call Logs with that call's details.
 
-- **US-003 (Call Detail Drawer)**  
-  As an operator, I open a call’s drawer and see:
-  - A multi-tab panel containing: **Transcript**, **Order Details** (if applicable), **Call Summary**, and **Internal Chat**.
-  - A compact **customer profile** section with phone number, total calls to this location, and total spend.
+- **US-003 (Call Detail Drawer)** ✅ **IMPLEMENTED**
+  As an operator, I open a call's drawer and see:
+  - Call details with health indicator, phone number, duration, and timestamp
+  - Top banner showing order/reservation/complaint highlights
+  - Conversation transcript with speaker turns (Certus AI vs Customer)
+  - Recording playback (if available)
+  - Order details with full breakdown (subtotal, tax, delivery, tip, total)
+  - Reservation details with special requests
+  - Call summary
 
 - **US-004 (Analytics)**  
   As an operator, I see time-series charts and `call_type` breakdowns with date/location filters and I can **export CSV** for the selected range.
@@ -201,14 +206,21 @@ Then a CSV downloads containing daily metrics for the range
    - Fully responsive layout
    - Clean, scannable design optimized for restaurant owners
 
-2. **Call Logs Page**
-   - Filterable, paginated call table (server-side).
-   - Right-hand panel (drawer) with:
-     - Transcript tab (speaker turns, search).
-     - Order Details tab (for orders).
-     - Call Summary tab (sentiment, intents, key bullet points).
-     - Internal Chat tab (per-call notes, with `@` mentions).
-   - Customer profile area embedded in the call panel.
+2. **Call Logs Page** ✅ **COMPLETED**
+   - ✅ Filterable table with time range selector (Today/Yesterday/Week/All)
+   - ✅ Location selector for franchise owners (multi-location support)
+   - ✅ Stats summary cards (Total Calls, Orders, Reservations, Avg Duration)
+   - ✅ Call type detection using actual database rows (never boolean flags)
+   - ✅ Server-side rendering with proper authentication flow
+   - ✅ Right-hand sheet drawer with:
+     - ✅ Health indicator and call metadata in sticky header
+     - ✅ Top banner for orders (revenue), reservations (guest count), complaints
+     - ✅ Recording playback with audio controls
+     - ✅ Conversation transcript with speaker avatars (AI/Customer)
+     - ✅ Order details with complete breakdown (uses `total_amount` from reliable `order_logs`)
+     - ✅ Reservation details with special requests
+     - ✅ Call summary section
+   - ✅ Skeleton loaders for better UX ([loading.tsx](../app/(dashboard)/call-logs/loading.tsx))
 
 3. **Analytics Page**
    - Daily trends (calls, revenue, minutes saved).
@@ -228,10 +240,15 @@ Then a CSV downloads containing daily metrics for the range
    - Materialized view `mv_metrics_daily` (with pg_cron refresh) used for KPI & analytics queries.
    - Supabase RLS & settings tables.
 
-6. **Auth & Roles**
-   - Supabase magic link auth.
-   - Single admin role for now (RBAC to be extended later).
-   - Demo mode toggle (seeded data / read-only).
+6. **Auth & Roles** ✅ **COMPLETED**
+   - ✅ Supabase magic link authentication
+   - ✅ Full RBAC system with roles and permissions (see [docs/auth/authentication.md](auth/authentication.md))
+   - ✅ Two-tier location access pattern:
+     - ✅ Franchise owners: Multi-location access with location selector
+     - ✅ Single location managers: Fixed to one location via email
+   - ✅ Pre-populated user validation (users must exist in `auth.users` and `user_roles_permissions`)
+   - ✅ Double permission check (login validation + callback verification)
+   - ✅ Session management with HTTP-only cookies and auto-refresh
 
 7. **Testing & Performance**
    - Unit tests (Vitest + Testing Library).
@@ -510,7 +527,7 @@ Key logic:
   - `(baseline_seconds / 60) * completed_calls`
   - Baseline from `location_settings` or `account_settings`, default 120 seconds.
 
-The MV is refreshed via `pg_cron` (e.g., every 2 minutes) and indexed on `(account_id, location_id, date)` for fast lookups.
+The MV is refreshed via `pg_cron` (e.g., every 5 minutes) and indexed on `(account_id, location_id, date)` for fast lookups.
 
 ### 4.5 ER Diagram (Conceptual)
 

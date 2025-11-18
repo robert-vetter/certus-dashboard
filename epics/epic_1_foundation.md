@@ -38,7 +38,7 @@ Establish the foundational infrastructure for the Certus Operations Dashboard, i
 
 - [ ] Supabase project provisioned with all tables, views, and materialized views
 - [ ] RLS policies enforce account-level isolation
-- [ ] `mv_metrics_daily` refreshes via pg_cron every 2 minutes
+- [ ] `mv_metrics_daily` refreshes via pg_cron every 5 minutes
 - [ ] Next.js app runs locally and deploys to Vercel
 - [ ] Authentication works with magic links and demo mode
 - [ ] CI pipeline passes: lint, unit tests (even if minimal), e2e setup

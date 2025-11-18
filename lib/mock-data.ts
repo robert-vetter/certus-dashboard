@@ -27,7 +27,7 @@ export interface RecentActivity {
   callType: 'phone' | 'delivery' | 'takeout' | 'other' | 'catering';
   icon: string;
   summary: string;
-  type: 'order' | 'reservation' | 'inquiry' | 'other';
+  type: 'order' | 'reservation' | 'inquiry' | 'catering' | 'other';
   callHealth: 'success' | 'warning' | 'error';
   from: string;
   duration: string;

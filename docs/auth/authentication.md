@@ -233,6 +233,95 @@ if (!error && user) {
 - Middleware protects all dashboard routes
 - Session auto-refreshes
 
+#### Step 7: Location Access Determination (Two-Tier Pattern)
+
+After successful authentication, the system determines which location(s) the user can access.
+
+**Tier 1: Franchise Owner (Multi-Location Access)**
+
+If user has `role_permission_id = 5` (owner permissions):
+
+```typescript
+// Check if user has an account (franchise owner)
+const { data: accountData } = await supabaseAdmin
+  .from('accounts')
+  .select('account_id, email')
+  .eq('email', user.email)
+  .maybeSingle();
+
+if (accountData) {
+  // Fetch ALL locations for this account
+  const { data: allLocations } = await supabaseAdmin
+    .from('locations')
+    .select('location_id, name, certus_notification_email')
+    .eq('account_id', accountData.account_id);
+
+  if (allLocations && allLocations.length > 0) {
+    locations = allLocations;
+
+    // Use selected location from URL param, or default to first location
+    if (searchParams.locationId) {
+      const locationIdNum = parseInt(searchParams.locationId);
+      selectedLocation = locations.find(loc => loc.location_id === locationIdNum) || locations[0];
+    } else {
+      selectedLocation = locations[0];
+    }
+  }
+}
+```
+
+**Franchise Owner Capabilities:**
+- Access to **all locations** under their account
+- Can switch between locations via URL parameter (`?locationId=123`)
+- Location selector shown in UI
+- Default to first location if no selection
+
+**Tier 2: Single Location Manager**
+
+If not a franchise owner or no account found, fall back to email-based lookup:
+
+```typescript
+// Single location manager - look up by email
+const { data: locationResults } = await supabaseAdmin
+  .from('locations')
+  .select('location_id, name, certus_notification_email')
+  .eq('certus_notification_email', user.email)
+  .limit(1);
+
+if (locationResults && locationResults.length > 0) {
+  selectedLocation = locationResults[0];
+  locations = [selectedLocation]; // Only one location
+}
+```
+
+**Single Location Manager Capabilities:**
+- Access to **one specific location** only
+- No location selector in UI (fixed to their location)
+- Tied to location via `certus_notification_email` field
+- Cannot switch locations
+
+**No Access Scenario:**
+
+If neither pattern matches (no account AND email not in locations):
+
+```typescript
+if (!selectedLocation) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen">
+      <h2>No Location Found</h2>
+      <p>No location is associated with {user.email}.</p>
+      <p>Please contact your administrator.</p>
+      <button>Sign Out</button>
+    </div>
+  );
+}
+```
+
+**Implementation References:**
+- [app/(dashboard)/overview/page.tsx](../../app/(dashboard)/overview/page.tsx:34-112) — Reference implementation
+- [app/(dashboard)/call-logs/page.tsx](../../app/(dashboard)/call-logs/page.tsx:34-112) — Same pattern
+- Both pages implement identical location access logic
+
 ---
 
 ## Row Level Security (RLS)

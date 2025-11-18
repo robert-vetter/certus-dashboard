@@ -133,7 +133,7 @@ You ensure that:
 
 - These views are **stable contracts** for the `frontend-developer`.
 - They are **indexed appropriately** to support the expected queries (e.g., by `account_id`, `location_id`, `date`, and `call_type`).
-- The materialized view is **refreshed via `pg_cron`** at a suitable cadence (e.g., every 2 minutes) and with `CONCURRENTLY` when needed.
+- The materialized view is **refreshed via `pg_cron`** at a suitable cadence (e.g., every 5 minutes) and with `CONCURRENTLY` when needed.
 
 ---
 
