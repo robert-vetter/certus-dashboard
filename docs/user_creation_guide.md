@@ -1,6 +1,6 @@
 # User Creation Guide
 
-**Last Updated:** 2025-11-20
+**Last Updated:** 2025-11-23
 **Purpose:** Step-by-step guide for creating new users in the Certus Operations Dashboard
 
 ---
@@ -10,6 +10,35 @@
 Creating a new user involves multiple steps across different tables. This guide explains what happens when a user is created, the required database insertions, and the validation logic that protects the system.
 
 **Key Principle:** Users can only create other users with equal or lesser permissions than their own.
+
+**Schema Change (Nov 2025):** The system now uses `user_roles_permissions` table with a composite primary key `(user_id, location_id)` instead of separate `user_location_access` table. Each user has one role permission set per location they can access.
+
+---
+
+## Account Creation vs User Creation
+
+**Important Distinction:** This guide covers **user creation** within an existing account. **Account creation** is a separate process handled in a different project.
+
+### New Account Creation Process (Background Information)
+
+When a new account is created (handled in a separate onboarding project), the following occurs:
+
+1. **Row in `auth.users`** - First account owner user is created
+2. **X rows in `user_roles_permissions`** - One row per location (for X locations)
+   ```sql
+   INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
+   VALUES
+     ('owner-uuid', 1, 'location-1-uuid'),
+     ('owner-uuid', 1, 'location-2-uuid'),
+     ('owner-uuid', 1, 'location-3-uuid');
+   ```
+3. **One row in `account_settings`** - Sets default user creation permission level
+   ```sql
+   INSERT INTO account_settings (account_id, user_creation_permission_level)
+   VALUES ('new-account-uuid', 5); -- Default: only owners can create users
+   ```
+
+**This guide focuses on creating additional users within an existing account.**
 
 ---
 
@@ -35,7 +64,8 @@ Before any user creation begins, the system validates:
 SELECT rp.role_id
 FROM user_roles_permissions urp
 JOIN roles_permissions rp ON urp.role_permission_id = rp.role_permission_id
-WHERE urp.user_id = 'creator-user-uuid';
+WHERE urp.user_id = 'creator-user-uuid'
+LIMIT 1;
 
 -- Get account's user creation permission level
 SELECT user_creation_permission_level
@@ -65,7 +95,7 @@ const canAssignRole = targetPermissions.every(p =>
 ```sql
 -- Get creator's accessible locations
 SELECT location_id
-FROM user_location_access
+FROM user_roles_permissions
 WHERE user_id = 'creator-user-uuid';
 
 -- All target location_ids must be in creator's accessible locations
@@ -95,6 +125,7 @@ const { data: newUserData, error } = await supabaseAdmin.auth.admin.createUser({
   email: 'newuser@example.com',
   email_confirm: true, // Auto-confirm email
   user_metadata: {
+    display_name: 'Full Name',
     created_by: 'creator-user-uuid',
     created_at: new Date().toISOString()
   }
@@ -107,68 +138,47 @@ const newUserId = newUserData.user.id;
 - `id`: UUID (auto-generated)
 - `email`: Provided email address
 - `email_confirmed_at`: Current timestamp (auto-confirmed)
-- `user_metadata`: Creator info
+- `user_metadata`: Creator info and display name
 
 ---
 
-### Step 3: Assign Permission Set
+### Step 3: Assign Role Permission and Location
 
-**Table:** `user_roles_permissions`
-
-```sql
-INSERT INTO user_roles_permissions (user_id, role_permission_id)
-VALUES (
-  'new-user-uuid',
-  3 -- role_permission_id selected by creator
-);
-```
-
-**Important:** This determines what the user can do in the system.
-
-**Rollback if this fails:**
-```typescript
-// Delete the auth user if role assignment fails
-await supabaseAdmin.auth.admin.deleteUser(newUserId);
-```
-
----
-
-### Step 4: Assign Location Access
-
-**Table:** `user_location_access`
-
-Users can be assigned to **one or multiple locations**.
+**Table:** `user_roles_permissions` (composite PK: user_id + location_id)
 
 **Single Location:**
 ```sql
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
+INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
 VALUES (
   'new-user-uuid',
-  'location-uuid',
-  'account-uuid',
-  'creator-user-uuid'
+  3, -- role_permission_id selected by creator
+  'location-uuid'
 );
 ```
 
-**Multiple Locations:**
+**Multiple Locations (one row per location):**
 ```sql
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
+INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
 VALUES
-  ('new-user-uuid', 'location-uuid-1', 'account-uuid', 'creator-user-uuid'),
-  ('new-user-uuid', 'location-uuid-2', 'account-uuid', 'creator-user-uuid'),
-  ('new-user-uuid', 'location-uuid-3', 'account-uuid', 'creator-user-uuid');
+  ('new-user-uuid', 3, 'location-uuid-1'),
+  ('new-user-uuid', 3, 'location-uuid-2'),
+  ('new-user-uuid', 3, 'location-uuid-3');
 ```
+
+**Important:**
+- The user gets the **same role_permission_id** for all their locations
+- Each row represents access to one specific location
+- Composite PK prevents duplicate (user_id, location_id) entries
 
 **Rollback if this fails:**
 ```typescript
-// Delete auth user and role assignment
+// Delete the auth user if role/location assignment fails
 await supabaseAdmin.auth.admin.deleteUser(newUserId);
-await supabase.from('user_roles_permissions').delete().eq('user_id', newUserId);
 ```
 
 ---
 
-### Step 5: Log Creation in Audit Table
+### Step 4: Log Creation in Audit Table
 
 **Table:** `user_audit_logs`
 
@@ -180,8 +190,9 @@ VALUES (
   'created',
   '{
     "email": "newuser@example.com",
+    "full_name": "Full Name",
     "role_permission_id": 3,
-    "location_ids": ["uuid1", "uuid2", "uuid3"]
+    "location_id": "uuid1"
   }'::jsonb
 );
 ```
@@ -195,7 +206,7 @@ VALUES (
 ### Scenario
 - **Creator:** Owner with permissions `[1, 2, 3, 4, 5]`
 - **Target User:** Manager with permission set `[1, 2, 3]`
-- **Locations:** 2 locations (Main St, Oak Ave)
+- **Location:** 1 location (Main St)
 
 ### Database Insertions
 
@@ -205,29 +216,22 @@ const { data } = await supabaseAdmin.auth.admin.createUser({
   email: 'manager@restaurant.com',
   email_confirm: true,
   user_metadata: {
+    display_name: 'John Manager',
     created_by: 'owner-uuid',
-    created_at: '2025-11-20T10:30:00Z'
+    created_at: '2025-11-23T10:30:00Z'
   }
 });
 // Result: id = 'manager-uuid'
 ```
 
-**2. user_roles_permissions**
+**2. user_roles_permissions (single row for single location)**
 ```sql
-INSERT INTO user_roles_permissions (user_id, role_permission_id)
-VALUES ('manager-uuid', 5);
+INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
+VALUES ('manager-uuid', 5, 'main-st-uuid');
 -- 5 is the role_permission_id for "Manager Default"
 ```
 
-**3. user_location_access**
-```sql
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
-VALUES
-  ('manager-uuid', 'main-st-uuid', 'account-uuid', 'owner-uuid'),
-  ('manager-uuid', 'oak-ave-uuid', 'account-uuid', 'owner-uuid');
-```
-
-**4. user_audit_logs**
+**3. user_audit_logs**
 ```sql
 INSERT INTO user_audit_logs (modified_user_id, modified_by_user_id, action, changes)
 VALUES (
@@ -236,66 +240,69 @@ VALUES (
   'created',
   '{
     "email": "manager@restaurant.com",
+    "full_name": "John Manager",
     "role_permission_id": 5,
-    "location_ids": ["main-st-uuid", "oak-ave-uuid"]
+    "location_id": "main-st-uuid"
   }'::jsonb
 );
 ```
 
 ---
 
-## User Types Examples
+## Multi-Location User Example
 
-### Example 1: Single-Location Manager
-**Use Case:** Store manager for one location
+### Scenario: Regional Manager with 3 Locations
 
+**Database Insertions:**
 ```sql
--- Step 1: Create in auth.users (via API)
--- Step 2: Assign manager role
-INSERT INTO user_roles_permissions (user_id, role_permission_id)
-VALUES ('user-uuid', 5); -- Manager Default
-
--- Step 3: Assign ONE location
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
-VALUES ('user-uuid', 'downtown-location-uuid', 'account-uuid', 'creator-uuid');
-```
-
----
-
-### Example 2: Multi-Location Regional Manager
-**Use Case:** Regional manager overseeing 3 locations
-
-```sql
--- Step 1: Create in auth.users (via API)
--- Step 2: Assign regional manager role
-INSERT INTO user_roles_permissions (user_id, role_permission_id)
-VALUES ('user-uuid', 7); -- Regional Manager Default
-
--- Step 3: Assign MULTIPLE locations
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
+-- One row per location, same role_permission_id
+INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
 VALUES
-  ('user-uuid', 'north-region-1-uuid', 'account-uuid', 'creator-uuid'),
-  ('user-uuid', 'north-region-2-uuid', 'account-uuid', 'creator-uuid'),
-  ('user-uuid', 'north-region-3-uuid', 'account-uuid', 'creator-uuid');
+  ('regional-manager-uuid', 7, 'north-region-1-uuid'),
+  ('regional-manager-uuid', 7, 'north-region-2-uuid'),
+  ('regional-manager-uuid', 7, 'north-region-3-uuid');
+-- 7 is the role_permission_id for "Regional Manager Default"
+```
+
+**To get user's accessible locations:**
+```sql
+SELECT location_id, locations.name
+FROM user_roles_permissions
+JOIN locations ON user_roles_permissions.location_id = locations.location_id
+WHERE user_id = 'regional-manager-uuid';
 ```
 
 ---
 
-### Example 3: Franchise Owner
-**Use Case:** Owner with access to ALL locations in their account
+## Account Settings: User Creation Control
+
+The `account_settings` table controls who can create users at the account level.
+
+### Creating/Updating Account Settings
 
 ```sql
--- Step 1: Create in auth.users (via API)
--- Step 2: Assign owner role
-INSERT INTO user_roles_permissions (user_id, role_permission_id)
-VALUES ('user-uuid', 9); -- Owner Default
-
--- Step 3: Assign ALL account locations
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
-SELECT 'user-uuid', location_id, account_id, 'creator-uuid'
-FROM locations
-WHERE account_id = 'account-uuid';
+-- Insert or update account settings (upsert)
+INSERT INTO account_settings (account_id, user_creation_permission_level)
+VALUES ('account-uuid', 5)
+ON CONFLICT (account_id)
+DO UPDATE SET user_creation_permission_level = 5;
 ```
+
+### Permission Levels
+
+| Value | Role | Who Can Create Users |
+|-------|------|---------------------|
+| 5 | Owner | Only owners (default) |
+| 4 | Regional Manager | Regional managers and owners |
+| 3 | Manager | Managers, regional managers, and owners |
+| 2 | Shift Lead | Shift leads and above |
+| 1 | Staff | Everyone (any authenticated user) |
+
+### UI for Account Settings
+
+Owners can configure this setting at:
+- **Route:** `/settings/account`
+- **Component:** `app/(dashboard)/settings/account/account-settings-client.tsx`
 
 ---
 
@@ -344,31 +351,23 @@ try {
   const { data: newUser } = await supabaseAdmin.auth.admin.createUser({...});
   const newUserId = newUser.user.id;
 
-  // Step 2: Assign role
-  const { error: roleError } = await supabase
+  // Step 2: Assign role and location
+  const { error: roleError } = await supabaseAdmin
     .from('user_roles_permissions')
-    .insert({...});
+    .insert({
+      user_id: newUserId,
+      role_permission_id: rolePermissionId,
+      location_id: locationId
+    });
 
   if (roleError) {
     // ROLLBACK: Delete auth user
     await supabaseAdmin.auth.admin.deleteUser(newUserId);
-    throw new Error('Failed to assign role');
+    throw new Error(`Failed to assign role: ${roleError.message}`);
   }
 
-  // Step 3: Assign locations
-  const { error: locationError } = await supabase
-    .from('user_location_access')
-    .insert([...]);
-
-  if (locationError) {
-    // ROLLBACK: Delete auth user and role
-    await supabaseAdmin.auth.admin.deleteUser(newUserId);
-    await supabase.from('user_roles_permissions').delete().eq('user_id', newUserId);
-    throw new Error('Failed to assign locations');
-  }
-
-  // Step 4: Log creation (non-critical, no rollback needed)
-  await supabase.from('user_audit_logs').insert({...});
+  // Step 3: Log creation (non-critical, no rollback needed)
+  await supabaseAdmin.from('user_audit_logs').insert({...});
 
 } catch (error) {
   return { success: false, error: error.message };
@@ -390,35 +389,19 @@ The user creation UI is located at:
 1. User clicks "Create User" button
 2. Dialog opens with form:
    - Email input (required)
+   - Full Name input (optional)
    - Role dropdown (auto-filtered to creatable roles)
-   - Location multi-select (auto-filtered to assignable locations)
+   - Location selector (auto-selected if only one location)
 3. User fills form and submits
 4. Server action validates and creates user
 5. Page refreshes to show new user
 6. Success/error message displayed
 
----
+### Auto-Selection Behavior
 
-## Account Settings Configuration
-
-Account owners can configure who can create users:
-
-**Table:** `account_settings`
-**Column:** `user_creation_permission_level`
-
-**Default Value:** `5` (Only owners can create users)
-
-```sql
--- Allow managers and above to create users
-UPDATE account_settings
-SET user_creation_permission_level = 3
-WHERE account_id = 'account-uuid';
-
--- Allow only owners to create users (most restrictive)
-UPDATE account_settings
-SET user_creation_permission_level = 5
-WHERE account_id = 'account-uuid';
-```
+- **Role:** Auto-selected if only one creatable role
+- **Location:** Auto-selected and disabled if only one location
+- Validation ensures location is always selected
 
 ---
 
@@ -426,10 +409,11 @@ WHERE account_id = 'account-uuid';
 
 1. **Permission Subset Validation:** Prevents privilege escalation (users can't create users more powerful than themselves)
 2. **Location Access Validation:** Ensures users can only assign access to locations they control
-3. **Account Isolation:** All location assignments include `account_id` to prevent cross-account access
+3. **Account Isolation:** Composite PK with location_id ensures proper account boundaries
 4. **Audit Logging:** All user creation actions are logged for compliance
 5. **Rollback on Failure:** Partial creation is prevented by rollback logic
 6. **Email Uniqueness:** System checks for existing users before creation
+7. **Admin Client Usage:** All database operations use service role to bypass RLS
 
 ---
 
@@ -449,7 +433,7 @@ WHERE account_id = 'account-uuid';
 
 ### User Created but Can't See Any Data
 **Cause:** User has no location assignments
-**Solution:** Assign at least one location in `user_location_access` table
+**Solution:** Assign at least one location in `user_roles_permissions` table
 
 ---
 
@@ -457,5 +441,5 @@ WHERE account_id = 'account-uuid';
 
 - **[Roles & Permissions](./roles_and_permissions.md)** — Role definitions and permission structure
 - **[Database Schema](./database_schema.md)** — Full database schema reference
-- **[User Data Flow](./user_data_flow.md)** — How data is displayed to different users
+- **[User Management Access Control](./user_management_access_control.md)** — Detailed access control logic
 - **[Authentication Flow](./auth/authentication.md)** — Login and session management

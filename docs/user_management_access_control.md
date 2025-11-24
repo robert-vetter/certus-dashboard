@@ -1,6 +1,6 @@
 # User Management Access Control
 
-**Last Updated:** 2025-11-20
+**Last Updated:** 2025-11-23
 **Purpose:** Define exactly how the system determines who can create, edit, and delete users
 
 ---
@@ -11,6 +11,9 @@ User management access is controlled by a combination of:
 1. The user's **role_id** (from their assigned role)
 2. The account's **user_creation_permission_level** setting
 3. **Permission array validation** (for role assignment)
+4. **Location access validation** (users can only assign locations they have access to)
+
+**Schema Note (Nov 2025):** The system now uses `user_roles_permissions` table with a composite primary key `(user_id, location_id)` instead of separate `user_location_access` table. Each user has one role permission set per location they can access.
 
 ---
 
@@ -33,10 +36,11 @@ if (!user) {
 SELECT role_permission_id, roles_permissions.role_id, roles_permissions.permission_ids
 FROM user_roles_permissions
 WHERE user_id = 'user-uuid'
+LIMIT 1
 ```
 
 **Requirements:**
-- User must have a row in `user_roles_permissions` table
+- User must have at least one row in `user_roles_permissions` table
 - The role must exist in `roles_permissions` table
 - Must have a valid `role_id` (1-5: staff, shift_lead, manager, regional_manager, owner)
 
@@ -46,15 +50,17 @@ WHERE user_id = 'user-uuid'
 
 ### Step 3: Get User's Account
 ```sql
-SELECT account_id
-FROM user_location_access
+SELECT location_id, locations.account_id
+FROM user_roles_permissions
+JOIN locations ON user_roles_permissions.location_id = locations.location_id
 WHERE user_id = 'user-uuid'
 LIMIT 1
 ```
 
 **Requirements:**
-- User must have at least one row in `user_location_access` table
-- This establishes which account the user belongs to
+- User must have at least one row in `user_roles_permissions` table
+- This establishes which account the user belongs to (via location)
+- The location must exist in `locations` table
 
 **If missing:** `canCreate = false`
 
@@ -104,23 +110,20 @@ For a user to potentially create other users, they need:
 1. **auth.users table:**
    - Row with their user ID and confirmed email
 
-2. **user_roles_permissions table:**
-   - Exactly ONE row linking their user_id to a role_permission_id
+2. **user_roles_permissions table (composite PK: user_id, location_id):**
+   - At least ONE row linking their user_id to a role_permission_id and location_id
    ```sql
-   INSERT INTO user_roles_permissions (user_id, role_permission_id)
-   VALUES ('user-uuid', role_permission_id)
+   INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
+   VALUES ('user-uuid', role_permission_id, 'location-uuid')
    ```
 
-3. **user_location_access table:**
-   - At least ONE row assigning them to a location
-   ```sql
-   INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
-   VALUES ('user-uuid', 'location-uuid', 'account-uuid', 'creator-uuid')
-   ```
+**Note:** The `user_roles_permissions` table now serves dual purposes:
+- Assigns the user's role permissions
+- Grants access to specific locations (one row per location)
 
 ### Optional: Account Settings
 
-4. **account_settings table (OPTIONAL):**
+3. **account_settings table (OPTIONAL):**
    - If NO row exists for the account → Default: only owners can create users
    - If row exists → Use `user_creation_permission_level` value
 
@@ -128,22 +131,19 @@ For a user to potentially create other users, they need:
 
 ## Account Settings Configuration
 
-### Creating Account Settings Row
+### Creating/Updating Account Settings Row
 
 ```sql
-INSERT INTO account_settings (
-  account_id,
-  user_creation_permission_level,
-  created_at,
-  updated_at
-)
-VALUES (
-  'account-uuid',
-  5, -- Only owners (default)
-  NOW(),
-  NOW()
-);
+-- Upsert pattern (insert or update if exists)
+INSERT INTO account_settings (account_id, user_creation_permission_level)
+VALUES ('account-uuid', 5)
+ON CONFLICT (account_id)
+DO UPDATE SET user_creation_permission_level = 5;
 ```
+
+**UI Location:** Owners can configure this setting at:
+- **Route:** `/settings/account`
+- **Component:** `app/(dashboard)/settings/account/account-settings-client.tsx`
 
 ### Permission Level Values
 
@@ -221,22 +221,17 @@ email: 'john@restaurant.com'
 email_confirmed_at: '2025-11-01 10:00:00'
 ```
 
-**2. user_roles_permissions ✅**
+**2. user_roles_permissions ✅** (composite PK: user_id, location_id)
 ```sql
 user_id: 'john-uuid'
 role_permission_id: 5
+location_id: 'downtown-location-uuid'
 roles_permissions.role_id: 3 (manager)
 roles_permissions.permission_ids: [1, 2, 3]
+locations.account_id: 'abc-account-uuid'
 ```
 
-**3. user_location_access ✅**
-```sql
-user_id: 'john-uuid'
-location_id: 'downtown-location-uuid'
-account_id: 'abc-account-uuid'
-```
-
-**4. account_settings**
+**3. account_settings**
 ```sql
 account_id: 'abc-account-uuid'
 user_creation_permission_level: 3 (manager)
@@ -281,19 +276,14 @@ If account wants managers to create users:
 
 ## Edge Cases
 
-### User has no locations
-```sql
-SELECT * FROM user_location_access WHERE user_id = 'user-uuid'
--- Returns: 0 rows
-```
-**Result:** Cannot create users (no account association)
-
-### User has no role
+### User has no locations/role
 ```sql
 SELECT * FROM user_roles_permissions WHERE user_id = 'user-uuid'
 -- Returns: 0 rows
 ```
-**Result:** Cannot create users (no role assigned)
+**Result:** Cannot create users (no role assigned and no account association)
+
+**Note:** Since `user_roles_permissions` now handles both role assignment and location access with composite PK (user_id, location_id), a user with no rows has neither a role nor location access.
 
 ### Account has no settings row
 ```sql
@@ -315,40 +305,56 @@ Required level: 1 (staff)
 
 ## Implementation in Code
 
-The complete logic is in [actions.ts:9-61](app/(dashboard)/settings/users/actions.ts#L9-L61):
+The complete logic is in [actions.ts:9-75](app/(dashboard)/settings/users/actions.ts#L9-L75):
 
 ```typescript
 export async function canUserCreateUsers() {
   // 1. Check authentication
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { canCreate: false, userRoleId: null }
+  const supabase = await createServerSupabaseClient()
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (authError || !user) {
+    return { canCreate: false, userRoleId: null }
+  }
+
+  // Use admin client to bypass RLS
+  const supabaseAdmin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  )
 
   // 2. Get user's role
-  const { data: userRole } = await supabase
+  const { data: userRoles, error: roleError } = await supabaseAdmin
     .from('user_roles_permissions')
-    .select('role_permission_id, roles_permissions!inner(role_id, permission_ids)')
-    .eq('user_id', user.id)
-    .single()
-
-  if (!userRole) return { canCreate: false, userRoleId: null }
-
-  const userRoleId = userRole.roles_permissions.role_id
-
-  // 3. Get user's account
-  const { data: userLocations } = await supabase
-    .from('user_location_access')
-    .select('account_id')
+    .select(`role_permission_id, roles_permissions!inner (role_id, permission_ids)`)
     .eq('user_id', user.id)
     .limit(1)
-    .single()
 
-  if (!userLocations) return { canCreate: false, userRoleId }
+  if (roleError || !userRoles || userRoles.length === 0) {
+    return { canCreate: false, userRoleId: null }
+  }
+
+  const userRole = userRoles[0]
+  const userRoleId = (userRole.roles_permissions as any).role_id
+
+  // 3. Get user's account (via location join)
+  const { data: userLocations } = await supabaseAdmin
+    .from('user_roles_permissions')
+    .select('location_id, locations!inner(account_id)')
+    .eq('user_id', user.id)
+    .limit(1)
+
+  if (!userLocations || userLocations.length === 0) {
+    return { canCreate: false, userRoleId }
+  }
+
+  const accountId = (userLocations[0].locations as any).account_id
 
   // 4. Check account settings
-  const { data: accountSettings } = await supabase
+  const { data: accountSettings } = await supabaseAdmin
     .from('account_settings')
     .select('user_creation_permission_level')
-    .eq('account_id', userLocations.account_id)
+    .eq('account_id', accountId)
     .maybeSingle()
 
   // 5. Compare role ID (default to 5 if no settings)
@@ -360,6 +366,12 @@ export async function canUserCreateUsers() {
   }
 }
 ```
+
+**Important Implementation Details:**
+- Uses **admin client** to bypass RLS policies
+- Changed from `.single()` to `.limit(1)` with array access
+- Gets account_id via join through `locations` table
+- All database queries use `supabaseAdmin` instead of regular client
 
 ---
 

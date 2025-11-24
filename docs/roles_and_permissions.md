@@ -1,6 +1,6 @@
 # Roles & Permissions Reference
 
-**Last Updated:** 2025-11-20
+**Last Updated:** 2025-11-23
 **Purpose:** Define all roles in the system and their future permission mappings
 
 ---
@@ -12,6 +12,8 @@ The Certus Operations Dashboard uses a flexible **Role-Based Access Control (RBA
 - Permissions define specific access rights (view calls, edit settings, etc.)
 - One role can have multiple permission sets
 - Users are assigned ONE permission set at a time
+
+**Schema Note (Nov 2025):** The system now uses `user_roles_permissions` table with a composite primary key `(user_id, location_id)` instead of separate `user_location_access` table. Each user has one role permission set per location they can access.
 
 ---
 
@@ -229,7 +231,7 @@ const canAssignRole = targetPermissions.every(p =>
 
 ## Location Access Rules
 
-Location access is managed through the `user_location_access` junction table, which explicitly defines which locations each user can access.
+Location access is managed through the `user_roles_permissions` table with a composite primary key (user_id, location_id), which explicitly defines which locations each user can access.
 
 ### Single Location Access
 **Applies to:** Staff, Shift Lead, Manager
@@ -237,11 +239,11 @@ Location access is managed through the `user_location_access` junction table, wh
 Users with these roles are typically assigned to **one specific location**.
 
 ```sql
--- User's location(s) via junction table
-SELECT l.location_id, l.name
-FROM user_location_access ula
-JOIN locations l ON ula.location_id = l.location_id
-WHERE ula.user_id = 'user-uuid';
+-- User's location(s) via user_roles_permissions
+SELECT urp.location_id, l.name
+FROM user_roles_permissions urp
+JOIN locations l ON urp.location_id = l.location_id
+WHERE urp.user_id = 'user-uuid';
 ```
 
 **UI Behavior:**
@@ -258,20 +260,18 @@ Users with these roles can access **multiple locations** under their account.
 ```sql
 -- Regional manager with specific location assignments
 SELECT l.*
-FROM user_location_access ula
-JOIN locations l ON ula.location_id = l.location_id
-WHERE ula.user_id = 'regional-manager-uuid'
-  AND ula.account_id = 'account-uuid';
+FROM user_roles_permissions urp
+JOIN locations l ON urp.location_id = l.location_id
+WHERE urp.user_id = 'regional-manager-uuid';
 ```
 
 **Owner:**
 ```sql
 -- Owner gets ALL locations for their account
 SELECT l.*
-FROM user_location_access ula
-JOIN locations l ON ula.location_id = l.location_id
-WHERE ula.user_id = 'owner-uuid'
-  AND ula.account_id = 'account-uuid';
+FROM user_roles_permissions urp
+JOIN locations l ON urp.location_id = l.location_id
+WHERE urp.user_id = 'owner-uuid';
 ```
 
 **UI Behavior:**
@@ -280,15 +280,16 @@ WHERE ula.user_id = 'owner-uuid'
 - Can view "All Locations" aggregate view
 - URL param for location selection: `?locationId=123`
 
-### Why user_location_access?
+### Why Composite Primary Key?
 
-The `user_location_access` table replaces the old email-based pattern (`locations.certus_notification_email`) because:
+The composite primary key `(user_id, location_id)` in `user_roles_permissions` provides:
 
-1. **One user, multiple locations**: A user can now be assigned to multiple locations explicitly
-2. **Explicit relationships**: No string matching required - direct foreign key relationships
-3. **Better audit trail**: Tracks who assigned access and when
-4. **Faster queries**: Indexed foreign keys instead of string comparisons
-5. **Account isolation**: Ensures users only access locations within their account
+1. **Dual purpose**: One table manages both role assignment AND location access
+2. **One user, multiple locations**: Insert one row per location (same role_permission_id)
+3. **Explicit relationships**: Direct foreign key relationships with proper constraints
+4. **Better data integrity**: Composite PK prevents duplicate (user_id, location_id) entries
+5. **Faster queries**: Single table join instead of two separate tables
+6. **Account isolation**: Ensures users only access locations within their account (via location FK)
 
 ---
 
@@ -299,35 +300,37 @@ The `user_location_access` table replaces the old email-based pattern (`location
 When a new user is created, the following steps occur:
 
 1. **User is added to `auth.users`** (via Supabase Admin API)
-2. **Permission set is assigned** in `user_roles_permissions` table
-3. **Location access is granted** via `user_location_access` table (one or more rows)
-4. **Audit log is created** in `user_audit_logs` table
-5. **User can now log in** and access features based on their permission set and location access
+2. **Permission set AND location access are assigned** in `user_roles_permissions` table (one row per location)
+3. **Audit log is created** in `user_audit_logs` table
+4. **User can now log in** and access features based on their permission set and location access
 
 ```sql
 -- Step 1: Create user in auth.users (via Supabase Admin API)
 -- This happens in code using supabaseAdmin.auth.admin.createUser()
 
--- Step 2: Assign permission set
-INSERT INTO user_roles_permissions (user_id, role_permission_id)
+-- Step 2: Assign permission set and location access (composite PK: user_id, location_id)
+-- Single location:
+INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
 VALUES (
   'new-user-uuid',
-  (SELECT role_permission_id FROM roles_permissions WHERE name = 'Manager Default')
+  (SELECT role_permission_id FROM roles_permissions WHERE name = 'Manager Default'),
+  'location-uuid'
 );
 
--- Step 3: Assign location access (can be multiple rows)
-INSERT INTO user_location_access (user_id, location_id, account_id, created_by)
+-- Multiple locations (one row per location, same role_permission_id):
+INSERT INTO user_roles_permissions (user_id, role_permission_id, location_id)
 VALUES
-  ('new-user-uuid', 'location-uuid-1', 'account-uuid', 'creator-user-uuid'),
-  ('new-user-uuid', 'location-uuid-2', 'account-uuid', 'creator-user-uuid');
+  ('new-user-uuid', 5, 'location-uuid-1'),
+  ('new-user-uuid', 5, 'location-uuid-2'),
+  ('new-user-uuid', 5, 'location-uuid-3');
 
--- Step 4: Log the creation
+-- Step 3: Log the creation
 INSERT INTO user_audit_logs (modified_user_id, modified_by_user_id, action, changes)
 VALUES (
   'new-user-uuid',
   'creator-user-uuid',
   'created',
-  '{"email": "newuser@example.com", "role_permission_id": 3, "location_ids": ["uuid1", "uuid2"]}'::jsonb
+  '{"email": "newuser@example.com", "role_permission_id": 5, "location_id": "uuid1"}'::jsonb
 );
 ```
 
@@ -336,11 +339,9 @@ See [User Creation Guide](./user_creation_guide.md) for detailed implementation 
 ### Changing User Roles
 
 ```sql
--- Update user's permission set
+-- Update user's permission set for ALL their locations
 UPDATE user_roles_permissions
-SET
-  role_permission_id = (SELECT role_permission_id FROM roles_permissions WHERE name = 'Owner Default'),
-  updated_at = NOW()
+SET role_permission_id = (SELECT role_permission_id FROM roles_permissions WHERE name = 'Owner Default')
 WHERE user_id = 'user-uuid';
 
 -- Log the change in audit table
@@ -439,11 +440,19 @@ description TEXT
 
 **user_roles_permissions:**
 ```sql
-user_id UUID PRIMARY KEY REFERENCES auth.users(id)
+user_id UUID REFERENCES auth.users(id)
+location_id UUID REFERENCES locations(location_id)
 role_permission_id INTEGER REFERENCES roles_permissions(role_permission_id)
 created_at TIMESTAMPTZ
 updated_at TIMESTAMPTZ
+PRIMARY KEY (user_id, location_id) -- Composite primary key
 ```
+
+**Key Changes (Nov 2025):**
+- Changed from single-column PK to composite PK (user_id, location_id)
+- Added location_id column to enable per-location role assignment
+- Replaces the need for separate user_location_access table
+- One row per user per location (same role_permission_id for all locations)
 
 **user_audit_logs:**
 ```sql

@@ -229,12 +229,91 @@ const { data: stats } = await supabase
 **Call Details:**
 Fetched from raw tables (`call_logs`, `order_logs`, `reservations`), not from metrics view.
 
-### Analytics Page (Future)
+### Analytics Page ✅ **IMPLEMENTED**
 
-Will use metrics view for charts:
-- Revenue over time (line chart)
-- Call volume trends
-- Success rate trends
+Uses metrics view and direct call queries depending on view type:
+
+**Single-Day Views (Today, Yesterday):**
+```typescript
+// Query call_logs directly for hourly granularity
+const { data: calls } = await supabase
+  .from('call_logs')
+  .select('*, order_logs(*), reservations(*)')
+  .eq('location_id', locationId)
+  .gte('started_at_utc', startOfDayUTC)
+  .lte('started_at_utc', endOfDayUTC)
+
+// Convert UTC to location timezone and group by hour
+const hourlyData = {}
+calls.forEach(call => {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: location.time_zone,
+    hour: 'numeric',
+    hour12: false,
+  })
+  const parts = formatter.formatToParts(new Date(call.started_at_utc))
+  const hour = parts.find(p => p.type === 'hour').value
+  const hourKey = `${hour.padStart(2, '0')}:00`
+
+  // Aggregate metrics by hour
+  hourlyData[hourKey].total_calls++
+  hourlyData[hourKey].total_revenue += call.order_logs[0]?.total || 0
+})
+```
+
+**Multi-Day Views (Last 7 Days, Month, All):**
+```typescript
+// Use mv_metrics_daily for efficiency
+const { data: metrics } = await supabase
+  .from('mv_metrics_daily')
+  .select('*')
+  .eq('location_id', locationId)
+  .gte('date', startDate)
+  .lte('date', endDate)
+  .order('date', { ascending: true })
+
+// Charts display daily aggregates
+```
+
+**Call Type Filtering:**
+Always queries actual tables, never uses boolean flags:
+```typescript
+// For "Orders" filter
+const { data: orders } = await supabase
+  .from('order_logs')
+  .select('call_id, total')
+  .in('call_id', allCallIds)
+
+// Filter calls to only those with matching orders
+const ordersOnly = calls.filter(call =>
+  orders.some(order => order.call_id === call.call_id)
+)
+```
+
+**Operating Hours Display:**
+```typescript
+// Fetch operating hours from location
+const { data: location } = await supabase
+  .from('locations')
+  .select('time_zone, operating_hours_json')
+  .eq('location_id', locationId)
+  .single()
+
+// Parse for current weekday
+const weekday = new Date(displayDate).toLocaleDateString('en-US', {
+  weekday: 'long'
+}).toUpperCase()
+
+const dayHours = location.operating_hours_json.find(
+  h => h.weekday === weekday
+)
+
+// Render as vertical lines on chart
+<ReferenceLine x={`${dayHours.startTime}:00`} stroke="green" label="Open" />
+<ReferenceLine x={`${dayHours.endTime}:00`} stroke="red" label="Close" />
+```
+
+**See:** [`docs/analytics_implementation.md`](../analytics_implementation.md) for complete technical details
 
 ---
 

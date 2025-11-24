@@ -14,8 +14,20 @@ export async function canUserCreateUsers(): Promise<{ canCreate: boolean; userRo
     return { canCreate: false, userRoleId: null }
   }
 
-  // Get user's role
-  const { data: userRole, error: roleError } = await supabase
+  // Use admin client to bypass RLS for checking permissions
+  const supabaseAdmin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  )
+
+  // Get user's role (any of their rows will have their role info)
+  const { data: userRoles, error: roleError } = await supabaseAdmin
     .from('user_roles_permissions')
     .select(`
       role_permission_id,
@@ -25,31 +37,33 @@ export async function canUserCreateUsers(): Promise<{ canCreate: boolean; userRo
       )
     `)
     .eq('user_id', user.id)
-    .single()
+    .limit(1)
 
-  if (roleError || !userRole) {
+  if (roleError || !userRoles || userRoles.length === 0) {
     return { canCreate: false, userRoleId: null }
   }
 
-  const userRoleId = userRole.roles_permissions.role_id
+  const userRole = userRoles[0]
+  const userRoleId = (userRole.roles_permissions as any).role_id
 
-  // Get user's account (to check account settings)
-  const { data: userLocations } = await supabase
-    .from('user_location_access')
-    .select('account_id')
+  // Get user's account via location (join through user_roles_permissions -> locations)
+  const { data: userLocations } = await supabaseAdmin
+    .from('user_roles_permissions')
+    .select('location_id, locations!inner(account_id)')
     .eq('user_id', user.id)
     .limit(1)
-    .single()
 
-  if (!userLocations) {
+  if (!userLocations || userLocations.length === 0) {
     return { canCreate: false, userRoleId }
   }
 
+  const accountId = (userLocations[0].locations as any).account_id
+
   // Check account settings for user creation permission level
-  const { data: accountSettings } = await supabase
+  const { data: accountSettings } = await supabaseAdmin
     .from('account_settings')
     .select('user_creation_permission_level')
-    .eq('account_id', userLocations.account_id)
+    .eq('account_id', accountId)
     .maybeSingle()
 
   const requiredRoleId = accountSettings?.user_creation_permission_level ?? 5 // Default: only owners
@@ -71,8 +85,20 @@ export async function getCreatableRoles() {
     throw new Error('Not authenticated')
   }
 
+  // Use admin client to bypass RLS
+  const supabaseAdmin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  )
+
   // Get current user's permissions
-  const { data: currentUserRole } = await supabase
+  const { data: currentUserRoles } = await supabaseAdmin
     .from('user_roles_permissions')
     .select(`
       roles_permissions!inner (
@@ -80,16 +106,16 @@ export async function getCreatableRoles() {
       )
     `)
     .eq('user_id', user.id)
-    .single()
+    .limit(1)
 
-  if (!currentUserRole) {
+  if (!currentUserRoles || currentUserRoles.length === 0) {
     throw new Error('User role not found')
   }
 
-  const currentUserPermissions = currentUserRole.roles_permissions.permission_ids
+  const currentUserPermissions = (currentUserRoles[0].roles_permissions as any).permission_ids
 
   // Get all available role permission sets
-  const { data: allRoles, error } = await supabase
+  const { data: allRoles, error } = await supabaseAdmin
     .from('roles_permissions')
     .select(`
       role_permission_id,
@@ -97,7 +123,7 @@ export async function getCreatableRoles() {
       description,
       permission_ids,
       role_id,
-      roles!inner (
+      roles!roles_permissions_role_id_fkey (
         name,
         description
       )
@@ -105,26 +131,27 @@ export async function getCreatableRoles() {
     .order('role_id', { ascending: true })
 
   if (error) {
-    throw new Error('Failed to fetch roles')
+    console.error('Error fetching roles:', error)
+    throw new Error(`Failed to fetch roles: ${error.message}`)
   }
 
   // Filter to only roles where all target permissions are subset of creator's permissions
   const creatableRoles = allRoles.filter(role =>
-    role.permission_ids.every(p => currentUserPermissions.includes(p))
+    role.permission_ids.every((p: number) => currentUserPermissions.includes(p))
   )
 
   return creatableRoles.map(role => ({
     rolePermissionId: role.role_permission_id,
     name: role.name,
     description: role.description,
-    roleName: role.roles.name,
+    roleName: (role.roles as any).name,
     roleId: role.role_id,
     permissionIds: role.permission_ids
   }))
 }
 
 /**
- * Get all locations that current user can assign new users to
+ * Get all locations that current user has access to
  */
 export async function getAssignableLocations() {
   const supabase = await createServerSupabaseClient()
@@ -134,28 +161,45 @@ export async function getAssignableLocations() {
     throw new Error('Not authenticated')
   }
 
-  // Get user's accessible locations
-  const { data: userLocations, error } = await supabase
-    .from('user_location_access')
+  // Use admin client to bypass RLS
+  const supabaseAdmin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  )
+
+  // Get user's accessible locations from user_roles_permissions
+  const { data: userLocations, error } = await supabaseAdmin
+    .from('user_roles_permissions')
     .select(`
       location_id,
-      account_id,
       locations!inner (
         location_id,
         name,
-        certus_notification_email
+        account_id
       )
     `)
     .eq('user_id', user.id)
 
   if (error) {
-    throw new Error('Failed to fetch locations')
+    console.error('Error fetching locations:', error)
+    throw new Error(`Failed to fetch locations: ${error.message}`)
+  }
+
+  if (!userLocations || userLocations.length === 0) {
+    console.warn('No locations found for user:', user.id)
+    return []
   }
 
   return userLocations.map(ul => ({
     locationId: ul.location_id,
-    locationName: ul.locations.name,
-    accountId: ul.account_id
+    locationName: (ul.locations as any).name,
+    accountId: (ul.locations as any).account_id
   }))
 }
 
@@ -165,7 +209,7 @@ export async function getAssignableLocations() {
 export async function createUser(
   email: string,
   rolePermissionId: number,
-  locationIds: string[],
+  locationId: string,
   fullName?: string
 ): Promise<{ success: boolean; userId?: string; error?: string }> {
   const supabase = await createServerSupabaseClient()
@@ -191,68 +235,7 @@ export async function createUser(
       return { success: false, error: 'You do not have permission to create users' }
     }
 
-    // 2. Get current user's permissions
-    const { data: creatorRole } = await supabase
-      .from('user_roles_permissions')
-      .select(`
-        roles_permissions!inner (
-          permission_ids
-        )
-      `)
-      .eq('user_id', user.id)
-      .single()
-
-    if (!creatorRole) {
-      return { success: false, error: 'Creator role not found' }
-    }
-
-    // 3. Get target role's permissions
-    const { data: targetRole } = await supabase
-      .from('roles_permissions')
-      .select('permission_ids, role_id')
-      .eq('role_permission_id', rolePermissionId)
-      .single()
-
-    if (!targetRole) {
-      return { success: false, error: 'Target role not found' }
-    }
-
-    // 4. VALIDATE: Can creator assign this role? (Permission array check)
-    const creatorPermissions = creatorRole.roles_permissions.permission_ids
-    const targetPermissions = targetRole.permission_ids
-
-    const canAssignRole = targetPermissions.every(p => creatorPermissions.includes(p))
-
-    if (!canAssignRole) {
-      return {
-        success: false,
-        error: 'You do not have sufficient permissions to create users with this role'
-      }
-    }
-
-    // 5. Validate location access
-    const { data: creatorLocations } = await supabase
-      .from('user_location_access')
-      .select('location_id, account_id')
-      .eq('user_id', user.id)
-
-    const creatorLocationIds = creatorLocations?.map(l => l.location_id) || []
-    const accountId = creatorLocations?.[0]?.account_id
-
-    if (!accountId) {
-      return { success: false, error: 'Creator account not found' }
-    }
-
-    // Ensure creator has access to all specified locations
-    const invalidLocations = locationIds.filter(locId => !creatorLocationIds.includes(locId))
-    if (invalidLocations.length > 0) {
-      return {
-        success: false,
-        error: 'You do not have access to some of the specified locations'
-      }
-    }
-
-    // 6. Check if user already exists
+    // Use admin client to bypass RLS for all queries
     const supabaseAdmin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -264,11 +247,75 @@ export async function createUser(
       }
     )
 
+    // 2. Get current user's permissions
+    const { data: creatorRoles } = await supabaseAdmin
+      .from('user_roles_permissions')
+      .select(`
+        roles_permissions!inner (
+          permission_ids
+        )
+      `)
+      .eq('user_id', user.id)
+      .limit(1)
+
+    if (!creatorRoles || creatorRoles.length === 0) {
+      return { success: false, error: 'Creator role not found' }
+    }
+
+    const creatorRole = creatorRoles[0]
+
+    // 3. Get target role's permissions
+    const { data: targetRole } = await supabaseAdmin
+      .from('roles_permissions')
+      .select('permission_ids, role_id')
+      .eq('role_permission_id', rolePermissionId)
+      .single()
+
+    if (!targetRole) {
+      return { success: false, error: 'Target role not found' }
+    }
+
+    // 4. VALIDATE: Can creator assign this role? (Permission array check)
+    const creatorPermissions = (creatorRole.roles_permissions as any).permission_ids
+    const targetPermissions = targetRole.permission_ids
+
+    const canAssignRole = targetPermissions.every((p: number) => creatorPermissions.includes(p))
+
+    if (!canAssignRole) {
+      return {
+        success: false,
+        error: 'You do not have sufficient permissions to create users with this role'
+      }
+    }
+
+    // 5. Validate location access
+    const { data: creatorLocations } = await supabaseAdmin
+      .from('user_roles_permissions')
+      .select('location_id, locations!inner(account_id)')
+      .eq('user_id', user.id)
+
+    const creatorLocationIds = creatorLocations?.map(l => l.location_id) || []
+    const accountId = creatorLocations?.[0] ? (creatorLocations[0].locations as any).account_id : null
+
+    if (!accountId) {
+      return { success: false, error: 'Creator account not found' }
+    }
+
+    // Ensure creator has access to the specified location
+    if (!creatorLocationIds.includes(locationId)) {
+      return {
+        success: false,
+        error: 'You do not have access to this location'
+      }
+    }
+
+    // 6. Check if user already exists
+
     const { data: { users: existingUsers } } = await supabaseAdmin.auth.admin.listUsers()
     const existingUser = existingUsers.find(u => u.email?.toLowerCase() === normalizedEmail)
 
     if (existingUser) {
-      return { success: false, error: 'A user with this email already exists' }
+      return { success: false, error: `A user with the email "${normalizedEmail}" already exists in the system` }
     }
 
     // 7. Create user in auth.users
@@ -289,43 +336,24 @@ export async function createUser(
 
     const newUserId = newUserData.user.id
 
-    // 8. Assign role permission
-    const { error: roleError } = await supabase
+    // 8. Assign role permission with location (single row)
+    const { error: roleError } = await supabaseAdmin
       .from('user_roles_permissions')
       .insert({
         user_id: newUserId,
-        role_permission_id: rolePermissionId
+        role_permission_id: rolePermissionId,
+        location_id: locationId
       })
 
     if (roleError) {
       console.error('Failed to assign role:', roleError)
       // Rollback: delete created user
       await supabaseAdmin.auth.admin.deleteUser(newUserId)
-      return { success: false, error: 'Failed to assign role to user' }
+      return { success: false, error: `Failed to assign role to user: ${roleError.message}` }
     }
 
-    // 9. Assign location access
-    const locationAccessRows = locationIds.map(locationId => ({
-      user_id: newUserId,
-      location_id: locationId,
-      account_id: accountId,
-      created_by: user.id
-    }))
-
-    const { error: locationError } = await supabase
-      .from('user_location_access')
-      .insert(locationAccessRows)
-
-    if (locationError) {
-      console.error('Failed to assign locations:', locationError)
-      // Rollback
-      await supabaseAdmin.auth.admin.deleteUser(newUserId)
-      await supabase.from('user_roles_permissions').delete().eq('user_id', newUserId)
-      return { success: false, error: 'Failed to assign location access' }
-    }
-
-    // 10. Log in audit table
-    await supabase
+    // 9. Log in audit table
+    await supabaseAdmin
       .from('user_audit_logs')
       .insert({
         modified_user_id: newUserId,
@@ -335,7 +363,7 @@ export async function createUser(
           email: normalizedEmail,
           full_name: fullName || null,
           role_permission_id: rolePermissionId,
-          location_ids: locationIds
+          location_id: locationId
         }
       })
 
@@ -361,34 +389,48 @@ export async function getAccountUsers() {
     throw new Error('Not authenticated')
   }
 
-  // Get current user's account
-  const { data: userLocations } = await supabase
-    .from('user_location_access')
-    .select('account_id')
+  // Use admin client to bypass RLS
+  const supabaseAdmin = createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  )
+
+  // Get current user's account via user_roles_permissions -> locations
+  const { data: userLocations } = await supabaseAdmin
+    .from('user_roles_permissions')
+    .select('location_id, locations!inner(account_id)')
     .eq('user_id', user.id)
     .limit(1)
-    .single()
 
-  if (!userLocations) {
+  if (!userLocations || userLocations.length === 0) {
     return []
   }
 
-  const accountId = userLocations.account_id
+  const accountId = (userLocations[0].locations as any).account_id
 
   // Get all users with access to this account's locations
-  const { data: accountUsers, error } = await supabase
-    .from('user_location_access')
+  const { data: accountUsers, error } = await supabaseAdmin
+    .from('user_roles_permissions')
     .select(`
       user_id,
+      location_id,
       locations!inner (
         location_id,
-        name
+        name,
+        account_id
       )
     `)
-    .eq('account_id', accountId)
+    .eq('locations.account_id', accountId)
 
   if (error) {
-    throw new Error('Failed to fetch users')
+    console.error('Error fetching account users:', error)
+    throw new Error(`Failed to fetch users: ${error.message}`)
   }
 
   // Group by user_id to get unique users with their locations
@@ -402,29 +444,18 @@ export async function getAccountUsers() {
       })
     }
     userMap.get(entry.user_id).locations.push({
-      locationId: entry.locations.location_id,
-      locationName: entry.locations.name
+      locationId: entry.location_id,
+      locationName: (entry.locations as any).name
     })
   }
 
   const userIds = Array.from(userMap.keys())
 
-  // Get user details from auth.users
-  const supabaseAdmin = createAdminClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    }
-  )
-
+  // Get user details from auth.users (using existing supabaseAdmin)
   const { data: { users: authUsers } } = await supabaseAdmin.auth.admin.listUsers()
 
   // Get role information
-  const { data: userRoles } = await supabase
+  const { data: userRoles, error: roleError } = await supabaseAdmin
     .from('user_roles_permissions')
     .select(`
       user_id,
@@ -432,12 +463,16 @@ export async function getAccountUsers() {
       roles_permissions!inner (
         name,
         role_id,
-        roles!inner (
+        roles!roles_permissions_role_id_fkey (
           name
         )
       )
     `)
     .in('user_id', userIds)
+
+  if (roleError) {
+    console.error('Error fetching user roles:', roleError)
+  }
 
   // Combine all data
   const enrichedUsers = userIds.map(userId => {
@@ -448,10 +483,10 @@ export async function getAccountUsers() {
     return {
       userId,
       email: authUser?.email || 'Unknown',
-      displayName: authUser?.raw_user_meta_data?.display_name || null,
+      displayName: authUser?.user_metadata?.display_name || null,
       createdAt: authUser?.created_at,
-      roleName: userRole?.roles_permissions?.roles?.name || 'No role',
-      rolePermissionName: userRole?.roles_permissions?.name || 'No permission set',
+      roleName: (userRole?.roles_permissions as any)?.roles?.name || 'No role',
+      rolePermissionName: (userRole?.roles_permissions as any)?.name || 'No permission set',
       rolePermissionId: userRole?.role_permission_id,
       locations: userData.locations
     }
@@ -490,45 +525,7 @@ export async function updateUser(
       return { success: false, error: 'Use your profile page to update your own information' }
     }
 
-    // Get target user's current role
-    const { data: targetRole } = await supabase
-      .from('user_roles_permissions')
-      .select(`
-        roles_permissions!inner (
-          permission_ids
-        )
-      `)
-      .eq('user_id', targetUserId)
-      .single()
-
-    if (!targetRole) {
-      return { success: false, error: 'Target user not found' }
-    }
-
-    // Get current user's permissions
-    const { data: creatorRole } = await supabase
-      .from('user_roles_permissions')
-      .select(`
-        roles_permissions!inner (
-          permission_ids
-        )
-      `)
-      .eq('user_id', user.id)
-      .single()
-
-    if (!creatorRole) {
-      return { success: false, error: 'Your role not found' }
-    }
-
-    // Validate: Can only update users with equal or lesser permissions
-    const canUpdate = targetRole.roles_permissions.permission_ids.every(p =>
-      creatorRole.roles_permissions.permission_ids.includes(p)
-    )
-
-    if (!canUpdate) {
-      return { success: false, error: 'You cannot update users with higher permissions than yours' }
-    }
-
+    // Use admin client to bypass RLS
     const supabaseAdmin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -539,6 +536,49 @@ export async function updateUser(
         }
       }
     )
+
+    // Get target user's current role (any row will have their role info)
+    const { data: targetRoles } = await supabaseAdmin
+      .from('user_roles_permissions')
+      .select(`
+        roles_permissions!inner (
+          permission_ids
+        )
+      `)
+      .eq('user_id', targetUserId)
+      .limit(1)
+
+    if (!targetRoles || targetRoles.length === 0) {
+      return { success: false, error: 'Target user not found' }
+    }
+
+    const targetRole = targetRoles[0]
+
+    // Get current user's permissions (any row will have their role info)
+    const { data: creatorRoles } = await supabaseAdmin
+      .from('user_roles_permissions')
+      .select(`
+        roles_permissions!inner (
+          permission_ids
+        )
+      `)
+      .eq('user_id', user.id)
+      .limit(1)
+
+    if (!creatorRoles || creatorRoles.length === 0) {
+      return { success: false, error: 'Your role not found' }
+    }
+
+    const creatorRole = creatorRoles[0]
+
+    // Validate: Can only update users with equal or lesser permissions
+    const canUpdate = (targetRole.roles_permissions as any).permission_ids.every((p: number) =>
+      (creatorRole.roles_permissions as any).permission_ids.includes(p)
+    )
+
+    if (!canUpdate) {
+      return { success: false, error: 'You cannot update users with higher permissions than yours' }
+    }
 
     const changes: Record<string, any> = {}
 
@@ -564,7 +604,7 @@ export async function updateUser(
     // Update role if provided
     if (updates.rolePermissionId !== undefined) {
       // Get new role's permissions
-      const { data: newRole } = await supabase
+      const { data: newRole } = await supabaseAdmin
         .from('roles_permissions')
         .select('permission_ids')
         .eq('role_permission_id', updates.rolePermissionId)
@@ -575,8 +615,8 @@ export async function updateUser(
       }
 
       // Validate creator can assign this role
-      const canAssignRole = newRole.permission_ids.every(p =>
-        creatorRole.roles_permissions.permission_ids.includes(p)
+      const canAssignRole = newRole.permission_ids.every((p: number) =>
+        (creatorRole.roles_permissions as any).permission_ids.includes(p)
       )
 
       if (!canAssignRole) {
@@ -587,7 +627,7 @@ export async function updateUser(
       }
 
       // Update role
-      const { error: roleError } = await supabase
+      const { error: roleError } = await supabaseAdmin
         .from('user_roles_permissions')
         .update({ role_permission_id: updates.rolePermissionId })
         .eq('user_id', targetUserId)
@@ -602,21 +642,21 @@ export async function updateUser(
 
     // Update locations if provided
     if (updates.locationIds !== undefined) {
-      // Get creator's locations
-      const { data: creatorLocations } = await supabase
-        .from('user_location_access')
-        .select('location_id, account_id')
+      // Get creator's locations from user_roles_permissions
+      const { data: creatorLocations } = await supabaseAdmin
+        .from('user_roles_permissions')
+        .select('location_id, role_permission_id, locations!inner(account_id)')
         .eq('user_id', user.id)
 
       const creatorLocationIds = creatorLocations?.map(l => l.location_id) || []
-      const accountId = creatorLocations?.[0]?.account_id
+      const accountId = creatorLocations?.[0] ? (creatorLocations[0].locations as any).account_id : null
 
       if (!accountId) {
         return { success: false, error: 'Creator account not found' }
       }
 
       // Ensure creator has access to all specified locations
-      const invalidLocations = updates.locationIds.filter(locId => !creatorLocationIds.includes(locId))
+      const invalidLocations = updates.locationIds.filter((locId: string) => !creatorLocationIds.includes(locId))
       if (invalidLocations.length > 0) {
         return {
           success: false,
@@ -624,22 +664,34 @@ export async function updateUser(
         }
       }
 
+      // Get target user's current role_permission_id (same for all their locations)
+      const currentRolePermissionId = targetRoles[0].roles_permissions ?
+        (await supabaseAdmin
+          .from('user_roles_permissions')
+          .select('role_permission_id')
+          .eq('user_id', targetUserId)
+          .limit(1)
+          .then(res => res.data?.[0]?.role_permission_id)) : null
+
+      if (!currentRolePermissionId) {
+        return { success: false, error: 'Failed to get user\'s current role' }
+      }
+
       // Delete existing location assignments
-      await supabase
-        .from('user_location_access')
+      await supabaseAdmin
+        .from('user_roles_permissions')
         .delete()
         .eq('user_id', targetUserId)
 
-      // Insert new location assignments
-      const locationAccessRows = updates.locationIds.map(locationId => ({
+      // Insert new location assignments (one row per location)
+      const locationAccessRows = updates.locationIds.map((locationId: string) => ({
         user_id: targetUserId,
         location_id: locationId,
-        account_id: accountId,
-        created_by: user.id
+        role_permission_id: updates.rolePermissionId || currentRolePermissionId
       }))
 
-      const { error: locationError } = await supabase
-        .from('user_location_access')
+      const { error: locationError } = await supabaseAdmin
+        .from('user_roles_permissions')
         .insert(locationAccessRows)
 
       if (locationError) {
@@ -652,7 +704,7 @@ export async function updateUser(
 
     // Log update in audit table
     if (Object.keys(changes).length > 0) {
-      await supabase
+      await supabaseAdmin
         .from('user_audit_logs')
         .insert({
           modified_user_id: targetUserId,
@@ -696,46 +748,7 @@ export async function deleteUser(targetUserId: string): Promise<{ success: boole
       return { success: false, error: 'You cannot delete your own account' }
     }
 
-    // Get target user's role
-    const { data: targetRole } = await supabase
-      .from('user_roles_permissions')
-      .select(`
-        roles_permissions!inner (
-          permission_ids
-        )
-      `)
-      .eq('user_id', targetUserId)
-      .single()
-
-    if (!targetRole) {
-      return { success: false, error: 'Target user not found' }
-    }
-
-    // Get current user's permissions
-    const { data: creatorRole } = await supabase
-      .from('user_roles_permissions')
-      .select(`
-        roles_permissions!inner (
-          permission_ids
-        )
-      `)
-      .eq('user_id', user.id)
-      .single()
-
-    if (!creatorRole) {
-      return { success: false, error: 'Your role not found' }
-    }
-
-    // Validate: Can only delete users with equal or lesser permissions
-    const canDelete = targetRole.roles_permissions.permission_ids.every(p =>
-      creatorRole.roles_permissions.permission_ids.includes(p)
-    )
-
-    if (!canDelete) {
-      return { success: false, error: 'You cannot delete users with higher permissions than yours' }
-    }
-
-    // Delete user from auth.users (cascade will handle other tables)
+    // Use admin client to bypass RLS
     const supabaseAdmin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -747,6 +760,50 @@ export async function deleteUser(targetUserId: string): Promise<{ success: boole
       }
     )
 
+    // Get target user's role (any row will have their role info)
+    const { data: targetRoles } = await supabaseAdmin
+      .from('user_roles_permissions')
+      .select(`
+        roles_permissions!inner (
+          permission_ids
+        )
+      `)
+      .eq('user_id', targetUserId)
+      .limit(1)
+
+    if (!targetRoles || targetRoles.length === 0) {
+      return { success: false, error: 'Target user not found' }
+    }
+
+    const targetRole = targetRoles[0]
+
+    // Get current user's permissions (any row will have their role info)
+    const { data: creatorRoles } = await supabaseAdmin
+      .from('user_roles_permissions')
+      .select(`
+        roles_permissions!inner (
+          permission_ids
+        )
+      `)
+      .eq('user_id', user.id)
+      .limit(1)
+
+    if (!creatorRoles || creatorRoles.length === 0) {
+      return { success: false, error: 'Your role not found' }
+    }
+
+    const creatorRole = creatorRoles[0]
+
+    // Validate: Can only delete users with equal or lesser permissions
+    const canDelete = (targetRole.roles_permissions as any).permission_ids.every((p: number) =>
+      (creatorRole.roles_permissions as any).permission_ids.includes(p)
+    )
+
+    if (!canDelete) {
+      return { success: false, error: 'You cannot delete users with higher permissions than yours' }
+    }
+
+    // Delete user from auth.users (cascade will handle other tables)
     const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(targetUserId)
 
     if (deleteError) {
@@ -755,7 +812,7 @@ export async function deleteUser(targetUserId: string): Promise<{ success: boole
     }
 
     // Log deletion
-    await supabase
+    await supabaseAdmin
       .from('user_audit_logs')
       .insert({
         modified_user_id: targetUserId,

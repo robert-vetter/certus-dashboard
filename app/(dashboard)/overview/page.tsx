@@ -44,67 +44,49 @@ export default async function OverviewPage({
     }
   );
 
-  // Check user's role permission level
-  const { data: userPermission } = await supabaseAdmin
+  // Get user's locations from user_roles_permissions table
+  const { data: userLocationRows, error: locationsError } = await supabaseAdmin
     .from('user_roles_permissions')
-    .select('role_permission_id')
-    .eq('user_id', user.id)
-    .maybeSingle();
+    .select(`
+      location_id,
+      locations!inner (
+        location_id,
+        name,
+        certus_notification_email
+      )
+    `)
+    .eq('user_id', user.id);
 
   console.log('User email:', user.email);
-  console.log('User permission:', userPermission);
+  console.log('User locations:', userLocationRows);
 
   let locations: Array<{ location_id: number; name: string; certus_notification_email: string }> = [];
   let selectedLocation: { location_id: number; name: string; certus_notification_email: string } | null = null;
 
-  // Check if user has highest permissions (franchise owner)
-  if (userPermission?.role_permission_id === 5) {
-    // Check if user has an account (franchise owner)
-    const { data: accountData } = await supabaseAdmin
-      .from('accounts')
-      .select('account_id, email')
-      .eq('email', user.email)
-      .maybeSingle();
+  if (userLocationRows && userLocationRows.length > 0) {
+    // Extract unique locations from user_roles_permissions
+    locations = userLocationRows.map(row => ({
+      location_id: (row.locations as any).location_id,
+      name: (row.locations as any).name,
+      certus_notification_email: (row.locations as any).certus_notification_email
+    }));
 
-    console.log('Account data:', accountData);
-
-    if (accountData) {
-      // Fetch all locations for this account
-      const { data: allLocations, error: locationsError } = await supabaseAdmin
-        .from('locations')
-        .select('location_id, name, certus_notification_email')
-        .eq('account_id', accountData.account_id);
-
-      console.log('All locations for account:', allLocations);
-
-      if (!locationsError && allLocations && allLocations.length > 0) {
-        locations = allLocations;
-
-        // Use selected location from URL param, or default to first location
-        if (searchParams.locationId) {
-          const locationIdNum = parseInt(searchParams.locationId);
-          selectedLocation = locations.find(loc => loc.location_id === locationIdNum) || locations[0];
-        } else {
-          selectedLocation = locations[0];
-        }
+    // Remove duplicates (in case user has multiple roles at same location)
+    const uniqueLocationIds = new Set();
+    locations = locations.filter(loc => {
+      if (uniqueLocationIds.has(loc.location_id)) {
+        return false;
       }
-    }
-  }
+      uniqueLocationIds.add(loc.location_id);
+      return true;
+    });
 
-  // If not a franchise owner or no account found, fall back to email-based lookup
-  if (!selectedLocation) {
-    const { data: locationResults, error: locationError } = await supabaseAdmin
-      .from('locations')
-      .select('location_id, name, certus_notification_email')
-      .eq('certus_notification_email', user.email)
-      .limit(1);
-
-    console.log('Location query result:', locationResults);
-    console.log('Location query error:', locationError);
-
-    if (locationResults && locationResults.length > 0) {
-      selectedLocation = locationResults[0];
-      locations = [selectedLocation];
+    // Use selected location from URL param, or default to first location
+    if (searchParams.locationId) {
+      const locationIdNum = parseInt(searchParams.locationId);
+      selectedLocation = locations.find(loc => loc.location_id === locationIdNum) || locations[0];
+    } else {
+      selectedLocation = locations[0];
     }
   }
 

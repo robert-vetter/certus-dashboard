@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Plus, Trash2, Pencil } from 'lucide-react'
 import CreateUserDialog from './create-user-dialog'
 import EditUserDialog from './edit-user-dialog'
+import DeleteUserDialog from './delete-user-dialog'
 import { deleteUser } from './actions'
 import { useRouter } from 'next/navigation'
 
@@ -30,30 +31,37 @@ export default function UsersClient({ users }: UsersClientProps) {
   const router = useRouter()
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
-  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
+  const [deletingUser, setDeletingUser] = useState<User | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const handleEditUser = (user: User) => {
     setEditingUser(user)
     setIsEditDialogOpen(true)
   }
 
-  const handleDeleteUser = async (userId: string, email: string) => {
-    if (!confirm(`Are you sure you want to delete user ${email}? This action cannot be undone.`)) {
-      return
-    }
+  const handleDeleteClick = (user: User) => {
+    setDeletingUser(user)
+    setIsDeleteDialogOpen(true)
+  }
 
-    setDeletingUserId(userId)
+  const handleConfirmDelete = async () => {
+    if (!deletingUser) return
 
-    const result = await deleteUser(userId)
+    setIsDeleting(true)
+
+    const result = await deleteUser(deletingUser.userId)
 
     if (result.success) {
+      setIsDeleteDialogOpen(false)
+      setDeletingUser(null)
       router.refresh() // Refresh server component
     } else {
       alert(`Failed to delete user: ${result.error}`)
     }
 
-    setDeletingUserId(null)
+    setIsDeleting(false)
   }
 
   return (
@@ -134,7 +142,7 @@ export default function UsersClient({ users }: UsersClientProps) {
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEditUser(user)}
-                          disabled={deletingUserId === user.userId}
+                          disabled={isDeleting}
                           className="text-gray-600 hover:text-gray-700 hover:bg-gray-50"
                         >
                           <Pencil className="w-4 h-4" />
@@ -142,15 +150,11 @@ export default function UsersClient({ users }: UsersClientProps) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDeleteUser(user.userId, user.displayName || user.email)}
-                          disabled={deletingUserId === user.userId}
+                          onClick={() => handleDeleteClick(user)}
+                          disabled={isDeleting}
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
                         >
-                          {deletingUserId === user.userId ? (
-                            <span className="text-xs">Deleting...</span>
-                          ) : (
-                            <Trash2 className="w-4 h-4" />
-                          )}
+                          <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
                     </td>
@@ -173,6 +177,16 @@ export default function UsersClient({ users }: UsersClientProps) {
         open={isEditDialogOpen}
         onOpenChange={setIsEditDialogOpen}
         user={editingUser}
+      />
+
+      {/* Delete User Dialog */}
+      <DeleteUserDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+        userName={deletingUser?.displayName || deletingUser?.email || ''}
+        userEmail={deletingUser?.email || ''}
+        onConfirm={handleConfirmDelete}
+        isDeleting={isDeleting}
       />
     </div>
   )

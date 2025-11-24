@@ -11,13 +11,13 @@ const settingsNavItems = [
     icon: Users,
     description: 'Manage users and permissions'
   },
+  {
+    name: 'Account Settings',
+    href: '/settings/account',
+    icon: Building2,
+    description: 'Account details and preferences'
+  },
   // Future settings pages can be added here
-  // {
-  //   name: 'Account Settings',
-  //   href: '/settings/account',
-  //   icon: Building2,
-  //   description: 'Account details and preferences'
-  // },
   // {
   //   name: 'Notifications',
   //   href: '/settings/notifications',

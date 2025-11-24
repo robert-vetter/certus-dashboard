@@ -810,59 +810,93 @@ create index IF not exists idx_daily_call_reports_report_date on public.daily_ca
 
 ### calls_v
 
-Normalized call data with computed fields.
+Normalized call data with computed fields and **accurate call type detection**.
+
+⚠️ **IMPORTANT:** This view uses EXISTS subqueries to accurately determine call type by checking actual rows in related tables, not unreliable boolean flags.
 
 ```sql
-create view public.calls_v as
-select
-  c.call_id as id,
+CREATE VIEW calls_v AS
+SELECT
+  c.call_id AS id,
   c.location_id,
   l.account_id,
+
+  -- Status
   COALESCE(
-    NULLIF(
-      TRIM(
-        both
-        from
-          lower(c.call_status)
-      ),
-      ''::text
-    ),
-    case
-      when c.ended_at_utc is null then 'in_progress'::text
-      else 'completed'::text
-    end
-  ) as status,
-  case
-    when COALESCE(c.order_made, false) then 'order'::text
-    when COALESCE(c.reservation_made, false) then 'reservation'::text
-    when c.pathway_tags_formatted ~~* '%catering%'::text then 'catering'::text
-    else 'general'::text
-  end as call_type,
+    NULLIF(TRIM(BOTH FROM LOWER(c.call_status)), ''),
+    CASE
+      WHEN c.ended_at_utc IS NULL THEN 'in_progress'
+      ELSE 'completed'
+    END
+  ) AS status,
+
+  -- Call type (accurate detection using EXISTS)
+  CASE
+    WHEN EXISTS (
+      SELECT 1 FROM order_logs o WHERE o.call_id = c.call_id
+    ) THEN 'order'
+    WHEN EXISTS (
+      SELECT 1 FROM reservations r WHERE r.call_id = c.call_id
+    ) THEN 'reservation'
+    WHEN EXISTS (
+      SELECT 1 FROM complaints comp WHERE comp.call_id = c.call_id
+    ) THEN 'complaint'
+    WHEN c.pathway_tags_formatted ILIKE '%catering%' THEN 'catering'
+    ELSE 'general'
+  END AS call_type,
+
+  -- Call details
   c.inbound,
-  c.customer_number as from_number,
-  c.certus_number as to_number,
-  c.started_at_utc as started_at,
-  c.ended_at_utc as ended_at,
-  COALESCE(
-    c.corrected_duration_seconds,
-    EXTRACT(
-      epoch
-      from
-        c.ended_at_utc - c.started_at_utc
-    )::integer
-  ) as duration_seconds,
+  c.customer_number AS from_number,
+  c.certus_number AS to_number,
+  c.started_at_utc AS started_at,
+  c.ended_at_utc AS ended_at,
+  c.corrected_duration_seconds AS duration_seconds,
+
+  -- Call metadata
   c.recording_url,
-  NULLIF(c.call_summary, ''::text) as summary_md,
-  c.transcription_formatted as transcript_md
-from
-  call_logs c
-  left join locations l on l.location_id = c.location_id;
+  NULLIF(c.call_summary, '') AS summary_md,
+  c.transcription_formatted AS transcript_md,
+
+  -- Pathway tags and topic
+  c.pathway_tags_raw,
+  c.pathway_tags_formatted,
+  c.call_topic,
+
+  -- Call behavior flags
+  c.call_transferred,
+  c.repeat_caller_count,
+
+  -- Quality metrics
+  c.internal_csat_score,
+  c.ai_performance_rating
+
+FROM call_logs c
+LEFT JOIN locations l ON l.location_id = c.location_id;
 ```
 
 **Key Computed Fields:**
-- `status` - Normalized call status
-- `call_type` - Derived from flags (order/reservation/catering/general)
-- `duration_seconds` - Computed from timestamps or corrected_duration
+- `status` - Normalized call status ('in_progress' or 'completed')
+- `call_type` - **Accurately** derived by checking actual database rows:
+  - ✅ Checks `order_logs` table for orders
+  - ✅ Checks `reservations` table for reservations
+  - ✅ Checks `complaints` table for complaints
+  - ✅ Checks `pathway_tags_formatted` for catering
+  - ✅ Defaults to 'general' for inquiries
+- `duration_seconds` - Directly from `corrected_duration_seconds` (always populated)
+- `repeat_caller_count` - Count of previous calls from this customer
+- `pathway_tags_raw` - Raw pathway tags from call
+- `pathway_tags_formatted` - Formatted pathway tags
+- `call_topic` - Categorized call topic
+- `call_transferred` - Whether call was transferred to human
+- `internal_csat_score` - Internal customer satisfaction rating
+- `ai_performance_rating` - AI performance evaluation
+
+**Performance Indexes:**
+The following indexes support the EXISTS subqueries:
+- `idx_order_logs_call_id` on `order_logs(call_id)`
+- `idx_reservations_call_id` on `reservations(call_id)`
+- `idx_complaints_call_id` on `complaints(call_id)`
 
 ---
 

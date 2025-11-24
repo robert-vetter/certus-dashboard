@@ -18,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Checkbox } from '@/components/ui/checkbox'
 import { createUser, getCreatableRoles, getAssignableLocations } from './actions'
 import { useRouter } from 'next/navigation'
 
@@ -46,7 +45,7 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [selectedRoleId, setSelectedRoleId] = useState<string>('')
-  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([])
+  const [selectedLocationId, setSelectedLocationId] = useState<string>('')
 
   const [roles, setRoles] = useState<Role[]>([])
   const [locations, setLocations] = useState<Location[]>([])
@@ -63,7 +62,7 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
       setFullName('')
       setEmail('')
       setSelectedRoleId('')
-      setSelectedLocationIds([])
+      setSelectedLocationId('')
       setError(null)
     }
   }, [open])
@@ -76,6 +75,9 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
         getAssignableLocations()
       ])
 
+      console.log('Loaded roles:', rolesData)
+      console.log('Loaded locations:', locationsData)
+
       setRoles(rolesData)
       setLocations(locationsData)
 
@@ -84,33 +86,19 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
         setSelectedRoleId(rolesData[0].rolePermissionId.toString())
       }
 
-      // Auto-select all locations if only one available
+      // Auto-select location if only one available
       if (locationsData.length === 1) {
-        setSelectedLocationIds([locationsData[0].locationId])
+        setSelectedLocationId(locationsData[0].locationId)
+        console.log('Auto-selected location:', locationsData[0].locationId, locationsData[0].locationName)
       }
     } catch (err) {
       console.error('Failed to load roles/locations:', err)
-      setError('Failed to load form data. Please try again.')
+      setError(`Failed to load form data: ${err instanceof Error ? err.message : 'Unknown error'}`)
     } finally {
       setLoading(false)
     }
   }
 
-  const handleLocationToggle = (locationId: string) => {
-    setSelectedLocationIds(prev =>
-      prev.includes(locationId)
-        ? prev.filter(id => id !== locationId)
-        : [...prev, locationId]
-    )
-  }
-
-  const handleSelectAllLocations = () => {
-    if (selectedLocationIds.length === locations.length) {
-      setSelectedLocationIds([])
-    } else {
-      setSelectedLocationIds(locations.map(l => l.locationId))
-    }
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -127,8 +115,8 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
       return
     }
 
-    if (selectedLocationIds.length === 0) {
-      setError('Please select at least one location')
+    if (!selectedLocationId) {
+      setError('Please select a location')
       return
     }
 
@@ -138,7 +126,7 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
       const result = await createUser(
         email.trim(),
         parseInt(selectedRoleId),
-        selectedLocationIds,
+        selectedLocationId,
         fullName.trim() || undefined
       )
 
@@ -162,7 +150,7 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
         <DialogHeader>
           <DialogTitle>Create New User</DialogTitle>
           <DialogDescription>
-            Add a new user to your account. They will receive access to the selected locations.
+            Add a new user to your account. They will receive access to the selected location.
           </DialogDescription>
         </DialogHeader>
 
@@ -206,6 +194,7 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
                 value={selectedRoleId}
                 onValueChange={setSelectedRoleId}
                 disabled={submitting}
+                required
               >
                 <SelectTrigger id="role">
                   <SelectValue placeholder="Select a role" />
@@ -235,46 +224,35 @@ export default function CreateUserDialog({ open, onOpenChange }: CreateUserDialo
 
             {/* Location Selection */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Locations</Label>
-                {locations.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={handleSelectAllLocations}
-                    className="text-xs text-red-600 hover:text-red-700"
-                    disabled={submitting}
-                  >
-                    {selectedLocationIds.length === locations.length ? 'Deselect All' : 'Select All'}
-                  </button>
-                )}
-              </div>
-              <div className="border border-gray-200 rounded-lg p-4 max-h-48 overflow-y-auto">
-                {locations.length === 0 ? (
-                  <p className="text-sm text-gray-500">No locations available</p>
-                ) : (
-                  <div className="space-y-3">
-                    {locations.map((location) => (
-                      <div key={location.locationId} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={location.locationId}
-                          checked={selectedLocationIds.includes(location.locationId)}
-                          onCheckedChange={() => handleLocationToggle(location.locationId)}
-                          disabled={submitting}
-                        />
-                        <label
-                          htmlFor={location.locationId}
-                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                        >
-                          {location.locationName}
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {selectedLocationIds.length > 0 && (
+              <Label htmlFor="location">Location</Label>
+              <Select
+                value={selectedLocationId}
+                onValueChange={setSelectedLocationId}
+                disabled={submitting || locations.length === 1}
+                required
+              >
+                <SelectTrigger id="location">
+                  <SelectValue placeholder="Select a location" />
+                </SelectTrigger>
+                <SelectContent>
+                  {locations.map((location) => (
+                    <SelectItem
+                      key={location.locationId}
+                      value={location.locationId}
+                    >
+                      {location.locationName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {locations.length === 0 && (
                 <p className="text-xs text-gray-500">
-                  {selectedLocationIds.length} location{selectedLocationIds.length !== 1 ? 's' : ''} selected
+                  No locations available. You may not have access to any locations.
+                </p>
+              )}
+              {locations.length === 1 && (
+                <p className="text-xs text-gray-500">
+                  Only location automatically selected
                 </p>
               )}
             </div>

@@ -486,13 +486,20 @@ tests/
   - `getCallDetail(callId)` → call, order, reservation, summary, transcript.
   - `listInternalNotes(callId)`.
 
-**`/analytics`**
+**`/analytics`** ✅ **IMPLEMENTED**
 
-- Fetches timeseries from `mv_metrics_daily`.
+- Implements smart single-day vs multi-day logic:
+  - **Single-day views** (Today, Yesterday): Fetches `call_logs` directly, groups by hour with timezone conversion
+  - **Multi-day views** (Last 7 Days, Month, All): Fetches `mv_metrics_daily` for aggregates
+- Call type filtering queries actual tables (`order_logs`, `reservations`) instead of boolean flags
+- Timezone conversion using `Intl.DateTimeFormat` for accurate hourly grouping
 - Renders:
-  - Calls, revenue, minutes saved charts.
-  - `call_type` distribution charts (derived from `calls_v` or aggregated from MV).
-- Export CSV button (server action sends file).
+  - Hero revenue chart with gradient styling and trend indicators
+  - Operating hours overlay (green "Open", red "Close" lines) for single-day views
+  - Quick stats bar with 6 metrics (calls, orders, reservations, upsells, labour saved, call time)
+  - Secondary charts for call type distribution
+- Export CSV button (server action sends file with proper filename)
+- **See:** [`docs/analytics_implementation.md`](../analytics_implementation.md) for complete documentation
 
 **`/settings/configuration`**
 

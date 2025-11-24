@@ -155,8 +155,20 @@ As a **restaurant operator** (or Certus ops agent), I want to:
   - Reservation details with special requests
   - Call summary
 
-- **US-004 (Analytics)**  
+- **US-004 (Analytics)** ✅ **IMPLEMENTED**
   As an operator, I see time-series charts and `call_type` breakdowns with date/location filters and I can **export CSV** for the selected range.
+
+  **Implemented Features:**
+  - Time range filtering (Today, Yesterday, Last 7 Days, Last Month, All Time)
+  - Call type filtering (All Calls, Orders, Reservations, Catering, FAQ)
+  - Single-day hourly views with timezone conversion
+  - Multi-day daily aggregate views
+  - Operating hours overlay on single-day charts
+  - Revenue chart with trend indicators
+  - Quick stats bar with 6 key metrics
+  - CSV export functionality
+
+  **See:** [`docs/analytics_implementation.md`](analytics_implementation.md) and [`docs/analytics_complete_summary.md`](analytics_complete_summary.md)
 
 - **US-005 (Configuration)**  
   As an admin, I manage:
@@ -222,11 +234,15 @@ Then a CSV downloads containing daily metrics for the range
      - ✅ Call summary section
    - ✅ Skeleton loaders for better UX ([loading.tsx](../app/(dashboard)/call-logs/loading.tsx))
 
-3. **Analytics Page**
-   - Daily trends (calls, revenue, minutes saved).
-   - Breakdown by `call_type`.
-   - Date and location filters.
-   - CSV export.
+3. **Analytics Page** ✅ **COMPLETED**
+   - ✅ Time range filtering (Today, Yesterday, Week, Month, All Time)
+   - ✅ Call type filtering (All Calls, Orders, Reservations, Catering, FAQ)
+   - ✅ Single-day hourly views with timezone conversion
+   - ✅ Multi-day daily aggregates
+   - ✅ Hero revenue chart with operating hours overlay
+   - ✅ Quick stats bar (6 metrics with trends)
+   - ✅ CSV export functionality
+   - **See:** [`docs/analytics_implementation.md`](analytics_implementation.md) for complete documentation
 
 4. **Configuration Pages**
    - Business Hours (CRUD).

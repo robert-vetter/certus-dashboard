@@ -13,10 +13,10 @@ const navigationItems = [
     label: 'Overview',
   },
   {
-    id: 'metrics',
-    href: '/metrics',
+    id: 'analytics',
+    href: '/analytics',
     icon: 'ChartLineUp',
-    label: 'Metrics',
+    label: 'Analytics',
   },
   {
     id: 'call-logs',
